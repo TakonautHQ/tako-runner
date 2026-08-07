@@ -38,10 +38,18 @@ load ambient third-party Pi packages into unattended Runs.
 
 ## Homebrew
 
-After the Takonaut tap is published:
+Install Tako Runner from the official tap. Homebrew adds the tap and trusts only
+this formula:
 
 ```bash
-brew tap takonaut/tap
+brew install TakonautHQ/tap/tako-runner
+```
+
+If you tap first, explicitly trust the formula before using its short name:
+
+```bash
+brew tap TakonautHQ/tap
+brew trust --formula TakonautHQ/tap/tako-runner
 brew install tako-runner
 ```
 
@@ -209,8 +217,9 @@ bun run formula:render -- VERSION SHA256 dist/tako-runner.rb
 brew style dist/tako-runner.rb
 ```
 
-Commit the rendered formula to the separate `takonaut/homebrew-tap` repository
-as `Formula/tako-runner.rb`.
+Commit the rendered formula to
+[`TakonautHQ/homebrew-tap`](https://github.com/TakonautHQ/homebrew-tap) as
+`Formula/tako-runner.rb`.
 
 ## License
 
