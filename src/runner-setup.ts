@@ -18,17 +18,10 @@ export interface RunnerSetupProject {
 	repositories: RunnerSetupRepository[];
 }
 
-export interface RunnerSetupAgent {
-	id: string;
-	name: string;
-	slug: string;
-}
-
 export interface RunnerSetupCatalog {
 	organization: { id: string; name: string };
 	runner: { id: string; name: string; capacity: number };
 	projects: RunnerSetupProject[];
-	agents: RunnerSetupAgent[];
 }
 
 export interface RunnerSetupRepositoryMatch {
@@ -41,7 +34,7 @@ export interface RunnerSetupSelection {
 	projectId: string;
 	repositoryId: string;
 	repositoryPath: string;
-	agentIds: string[];
+	trustedNative?: boolean;
 }
 
 export interface DetectedRunnerRepository {
@@ -130,11 +123,10 @@ export function applyRunnerSetupSelection(
 	if (
 		!selection.projectId ||
 		!selection.repositoryId ||
-		!isAbsolute(selection.repositoryPath) ||
-		selection.agentIds.length === 0
+		!isAbsolute(selection.repositoryPath)
 	) {
 		throw new Error(
-			"Runner setup requires a Project, repository, absolute path, and at least one Agent",
+			"Runner setup requires a Project, repository, and absolute path",
 		);
 	}
 	return {
@@ -144,9 +136,11 @@ export function applyRunnerSetupSelection(
 			[selection.repositoryId]: {
 				projectId: selection.projectId,
 				path: selection.repositoryPath,
+				...(selection.trustedNative === undefined
+					? {}
+					: { trustedNative: selection.trustedNative }),
 			},
 		},
-		agentIds: [...new Set(selection.agentIds)].sort(),
 	};
 }
 

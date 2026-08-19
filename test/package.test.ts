@@ -15,9 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 let parsedPackage: unknown;
 try {
-	parsedPackage = JSON.parse(
-		readFileSync(join(root, "package.json"), "utf8"),
-	);
+	parsedPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 } catch (error) {
 	throw new Error("package.json must contain valid JSON", { cause: error });
 }
@@ -42,6 +40,10 @@ describe("standalone package", () => {
 			"tako-runner": "./src/runner-cli.ts",
 			"takonaut-runner": "./src/runner-cli.ts",
 		});
+	});
+
+	it("publishes the profile-only Trusted Runner as v0.2.0", () => {
+		expect(pkg.version).toBe("0.2.0");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

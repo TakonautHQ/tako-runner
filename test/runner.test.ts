@@ -26,6 +26,7 @@ import {
 	resolveSafeRunnerPath,
 	runnerDiffRange,
 	runnerFetchRefspecs,
+	runnerSystemPrompt,
 	saveRunnerDaemonConfig,
 	type RunnerClaim,
 } from "../src/runner";
@@ -50,11 +51,14 @@ const claim = (overrides: Partial<RunnerClaim> = {}): RunnerClaim => ({
 	input: "Review this change.",
 	trigger_payload: { head_sha: "abc123" },
 	definition_snapshot: {
-		agent_id: "agent-1",
-		agent_slug: "reviewer",
-		instructions: "Review only.",
-		model_tier: "standard",
-		tool_grants: { allow: ["read", "grep"] },
+		agent_profile_id: "profile-1",
+		agent_profile_revision_id: "profile-revision-1",
+		agent_profile_revision_hash: "a".repeat(64),
+		agent_profile_snapshot: {
+			identity: { name: "Review Profile" },
+			instructions: "Review only.",
+			tool_grants: { allow: ["read", "grep"] },
+		},
 	},
 	revision_spec: {},
 	operation_snapshot: {},
@@ -110,6 +114,7 @@ describe("Runner daemon config", () => {
 		saveRunnerDaemonConfig(capabilityConfig, { configPath, credentialPath });
 
 		expect(readFileSync(configPath, "utf8")).not.toContain("tkr_secret");
+		expect(readFileSync(configPath, "utf8")).not.toContain("agentIds");
 		expect(statSync(credentialPath).mode & 0o777).toBe(0o600);
 		expect(
 			loadRunnerDaemonConfig({ configPath, credentialPath }),
@@ -119,7 +124,6 @@ describe("Runner daemon config", () => {
 			repositoryBindings: {
 				"repo-1": { projectId: "project-1", path: "/work/widget" },
 			},
-			agentIds: ["agent-1"],
 		});
 	});
 
@@ -420,7 +424,6 @@ describe("Runner API client", () => {
 				repositoryBindings: {
 					"repo-1": { projectId: "project-1", path: "/work/widget" },
 				},
-				agentIds: ["agent-1"],
 			},
 			fetchMock as typeof fetch,
 		);
@@ -449,10 +452,12 @@ describe("Runner API client", () => {
 			parseJsonObject(String(fetchMock.mock.calls[0]?.[1]?.body)),
 		).toMatchObject({
 			protocol_version: 1,
-			runner_version: "0.1.0",
+			runner_version: "0.2.0",
 			repository_ids: ["repo-1"],
-			agent_ids: ["agent-1"],
 		});
+		expect(
+			parseJsonObject(String(fetchMock.mock.calls[0]?.[1]?.body)),
+		).not.toHaveProperty("agent_ids");
 		expect(fetchMock.mock.calls[1]?.[1]?.redirect).toBe("error");
 		expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({
 			Authorization: "Bearer tkr_machine",
@@ -475,14 +480,17 @@ describe("Runner tool grants", () => {
 
 	it("supports enabled catalog-style Runner and PR review grants", () => {
 		const catalogClaim = claim({
-			definition_snapshot: {
-				...claim().definition_snapshot,
+		definition_snapshot: {
+			...claim().definition_snapshot,
+			agent_profile_snapshot: {
+				...claim().definition_snapshot.agent_profile_snapshot,
 				tool_grants: {
 					"runner.read": { enabled: true },
 					"runner.diff": { enabled: true },
 					"runner.grep": { enabled: false },
 				},
 			},
+		},
 		});
 		expect(
 			makeRunnerTools(process.cwd(), catalogClaim).map((tool) => tool.name),
@@ -491,7 +499,10 @@ describe("Runner tool grants", () => {
 		const reviewClaim = claim({
 			definition_snapshot: {
 				...claim().definition_snapshot,
-				tool_grants: { "github.review": { enabled: true } },
+				agent_profile_snapshot: {
+						...claim().definition_snapshot.agent_profile_snapshot,
+						tool_grants: { "github.review": { enabled: true } },
+				},
 			},
 		});
 		expect(
@@ -503,6 +514,31 @@ describe("Runner tool grants", () => {
 			"runner_grep",
 			"runner_git_diff",
 		]);
+	});
+});
+
+describe("Runner Profile identity", () => {
+	it("uses only the nested immutable Profile identity and instructions", () => {
+		const prompt = runnerSystemPrompt(claim(), false);
+		expect(prompt).toContain("Agent Profile 'Review Profile'");
+		expect(prompt).toContain("Review only.");
+		expect(prompt).not.toContain("agent_slug");
+	});
+
+	it("falls back only to the immutable Profile ID when the Profile name is absent", () => {
+		const prompt = runnerSystemPrompt(
+			claim({
+				definition_snapshot: {
+					...claim().definition_snapshot,
+					agent_profile_snapshot: { tool_grants: {} },
+				},
+			}),
+			false,
+		);
+		expect(prompt).toContain("Agent Profile 'profile-1'");
+		expect(prompt).toContain(
+			"Follow the immutable Profile policy and use only allowed tools.",
+		);
 	});
 });
 

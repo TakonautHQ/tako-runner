@@ -3,7 +3,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { createInterface } from "node:readline/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
 	defaultRunnerConfigPaths,
@@ -28,7 +27,6 @@ import {
 	matchRunnerSetupRepository,
 	verifyRunnerRepositoryFetch,
 	type DetectedRunnerRepository,
-	type RunnerSetupCatalog,
 } from "./runner-setup";
 
 function value(args: string[], name: string): string | undefined {
@@ -80,19 +78,13 @@ function printWarning(summary: string, detail: string): void {
 	console.error(`${color("1;33", "⚠")} ${color("1;33", summary)}\n  ${detail}`);
 }
 
-function values(args: string[], name: string): string[] {
-	return args.flatMap((arg, index) =>
-		arg === name && args[index + 1] ? [args[index + 1] as string] : [],
-	);
-}
-
 function usage(): never {
 	console.error(`Usage:
-  tako-runner setup [--url URL] [--org ORG_ID] [--path REPOSITORY_ROOT] [--repository-id ID] [--project-id ID] [--agent-id ID] [--all-agents] [--start-service] [--force]
+  tako-runner setup [--url URL] [--org ORG_ID] [--path REPOSITORY_ROOT] [--repository-id ID] [--project-id ID] [--trusted-native] [--start-service] [--force]
   tako-runner configure --url URL --org ORG_ID [--poll-ms 2000] [--lease-seconds 90]
   tako-runner enroll [--url URL] [--name NAME] [--capacity 1] [--force]
   tako-runner login [enroll options]
-  tako-runner map PROJECT_ID REPOSITORY_ROOT --repository-id REPOSITORY_ID [--agent-id AGENT_ID]
+  tako-runner map PROJECT_ID REPOSITORY_ROOT --repository-id REPOSITORY_ID [--trusted-native|--disable-trusted-native]
   tako-runner status
   tako-runner diagnostic-bundle [--output FILE]
   tako-runner once
@@ -203,48 +195,6 @@ async function enroll(args: string[]): Promise<void> {
 	}
 }
 
-async function chooseSetupAgents(
-	catalog: RunnerSetupCatalog,
-	args: string[],
-): Promise<string[]> {
-	const explicit = values(args, "--agent-id");
-	if (explicit.length > 0) return explicit;
-	if (args.includes("--all-agents")) {
-		return catalog.agents.map((agent) => agent.id);
-	}
-	if (catalog.agents.length === 1) {
-		return [catalog.agents[0]?.id as string];
-	}
-	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		throw new Error(
-			"Non-interactive setup requires --agent-id or --all-agents",
-		);
-	}
-	console.error("Select allowed Agents (comma-separated numbers):");
-	catalog.agents.forEach((agent, index) => {
-		console.error(`  ${index + 1}. ${agent.name} (${agent.slug})`);
-	});
-	const prompt = createInterface({
-		input: process.stdin,
-		output: process.stdout,
-	});
-	try {
-		const answer = await prompt.question("Agents: ");
-		const selected = answer
-			.split(",")
-			.map((part) => Number(part.trim()) - 1)
-			.filter((index) => Number.isInteger(index) && index >= 0)
-			.map((index) => catalog.agents[index]?.id)
-			.filter((agentId): agentId is string => Boolean(agentId));
-		if (selected.length === 0) {
-			throw new Error("Select at least one Agent");
-		}
-		return selected;
-	} finally {
-		prompt.close();
-	}
-}
-
 async function verifyPiProviderAuthentication(): Promise<string[]> {
 	let modelRuntime: ModelRuntime;
 	try {
@@ -351,6 +301,12 @@ async function setup(args: string[]): Promise<void> {
 	}
 	const existing = config.repositoryBindings?.[match.repository.id];
 	if (
+		args.includes("--trusted-native") &&
+		args.includes("--disable-trusted-native")
+	) {
+		throw new Error("Choose only one Trusted Native repository mode");
+	}
+	if (
 		existing &&
 		(existing.projectId !== match.projectId ||
 			existing.path !== detected.root) &&
@@ -360,25 +316,21 @@ async function setup(args: string[]): Promise<void> {
 			"This repository already has a different binding; rerun with --force to replace it",
 		);
 	}
-	const agentIds = await chooseSetupAgents(catalog, args);
-	const knownAgents = new Set(catalog.agents.map((agent) => agent.id));
-	if (agentIds.some((agentId) => !knownAgents.has(agentId))) {
-		throw new Error(
-			"One or more selected Agents are not enabled for this organization",
-		);
-	}
-
 	verifyRunnerRepositoryFetch(detected.root);
 	const configured = applyRunnerSetupSelection(config, {
 		projectId: match.projectId,
 		repositoryId: match.repository.id,
 		repositoryPath: detected.root,
-		agentIds,
+		trustedNative: args.includes("--trusted-native")
+			? true
+			: args.includes("--disable-trusted-native")
+				? false
+				: existing?.trustedNative,
 	});
 	saveRunnerDaemonConfig(configured);
 	await new RunnerApiClient(configured).advertiseCapabilities();
 	console.log(
-		`Configured ${match.repository.owner}/${match.repository.name} for Project ${match.projectName} with ${agentIds.length} Agent(s).`,
+		`Configured ${match.repository.owner}/${match.repository.name} for Project ${match.projectName}. Profile eligibility is managed in Takonaut.`,
 	);
 
 	if (args.includes("--start-service")) {
@@ -392,7 +344,12 @@ function mapRepository(args: string[]): void {
 	const projectId = args[0];
 	const rootValue = args[1];
 	const repositoryId = value(args, "--repository-id");
-	const agentIds = values(args, "--agent-id");
+	if (
+		args.includes("--trusted-native") &&
+		args.includes("--disable-trusted-native")
+	) {
+		throw new Error("Choose only one Trusted Native repository mode");
+	}
 	if (!projectId || !rootValue) usage();
 	const config = loadRunnerDaemonConfig();
 	const root = realpathSync(rootValue);
@@ -412,13 +369,17 @@ function mapRepository(args: string[]): void {
 		repositoryBindings: repositoryId
 			? {
 					...(config.repositoryBindings ?? {}),
-					[repositoryId]: { projectId, path: root },
+					[repositoryId]: {
+						projectId,
+						path: root,
+						trustedNative: args.includes("--trusted-native")
+							? true
+							: args.includes("--disable-trusted-native")
+								? false
+								: config.repositoryBindings?.[repositoryId]?.trustedNative,
+					},
 				}
 			: config.repositoryBindings,
-		agentIds:
-			agentIds.length > 0
-				? [...new Set([...(config.agentIds ?? []), ...agentIds])].sort()
-				: config.agentIds,
 	});
 	console.log(
 		repositoryId
@@ -460,7 +421,6 @@ function writeDiagnosticBundle(args: string[]): void {
 		leaseSeconds: config.leaseSeconds,
 		repositoryBindings,
 		legacyProjectMappingCount: Object.keys(config.repositories).length,
-		agentIds: [...(config.agentIds ?? [])].sort(),
 	};
 	writeFileSync(output, `${JSON.stringify(bundle, null, 2)}\n`, {
 		encoding: "utf8",
@@ -515,7 +475,6 @@ async function main(): Promise<void> {
 					leaseSeconds: config.leaseSeconds,
 					repositories: config.repositories,
 					repositoryBindings: config.repositoryBindings,
-					agentIds: config.agentIds,
 				},
 				null,
 				2,

@@ -45,10 +45,6 @@ const catalog: RunnerSetupCatalog = {
 			],
 		},
 	],
-	agents: [
-		{ id: "agent-1", name: "PR Reviewer", slug: "pr-reviewer" },
-		{ id: "agent-2", name: "Bug Analyst", slug: "bug-analyst" },
-	],
 };
 
 const config: RunnerDaemonConfig = {
@@ -189,12 +185,11 @@ describe("interactive Runner setup", () => {
 		).toThrow(/does not match the detected origin/i);
 	});
 
-	it("writes the same repository and Agent bindings as non-interactive setup", () => {
+	it("writes repository bindings without local Agent authorization", () => {
 		const configured = applyRunnerSetupSelection(config, {
 			projectId: "project-1",
 			repositoryId: "repo-1",
 			repositoryPath: "/work/widget",
-			agentIds: ["agent-2", "agent-1", "agent-1"],
 		});
 
 		expect(configured).toEqual({
@@ -202,9 +197,19 @@ describe("interactive Runner setup", () => {
 			repositoryBindings: {
 				"repo-1": { projectId: "project-1", path: "/work/widget" },
 			},
-			agentIds: ["agent-1", "agent-2"],
 		});
-		expect(JSON.stringify(configured)).toContain("tkr_secret");
+		expect(JSON.stringify(configured)).not.toContain("agentIds");
+	});
+
+	it("persists an explicit per-repository Trusted Native opt-in", () => {
+		const configured = applyRunnerSetupSelection(config, {
+			projectId: "project-1",
+			repositoryId: "repo-1",
+			repositoryPath: "/work/widget",
+			trustedNative: true,
+		});
+
+		expect(configured.repositoryBindings?.["repo-1"]?.trustedNative).toBe(true);
 	});
 
 	it("rejects origins that are not approved for the Runner", () => {

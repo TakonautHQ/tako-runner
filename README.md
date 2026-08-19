@@ -84,13 +84,31 @@ tako-runner setup \
   --org YOUR_ORGANIZATION_ID \
   --path /absolute/path/to/repository \
   --project-id YOUR_PROJECT_ID \
-  --repository-id YOUR_REPOSITORY_ID \
-  --agent-id YOUR_AGENT_ID
+  --repository-id YOUR_REPOSITORY_ID
 
 unset TAKONAUT_RUNNER_TOKEN
 ```
 
-Repeat `--agent-id` to allow more Agents, and run `map` once per repository. Repository-ID bindings support several repositories in the same Project and are advertised to Takonaut before work is claimed. The server schedules only Runs whose repository and Agent are present in that advertisement. Local paths never leave the Runner configuration file.
+Run `map` once per repository. Repository-ID bindings support several repositories in the same Project and are advertised to Takonaut before work is claimed. Takonaut alone authorizes execution through the Runner's exact published Agent Profile revision mapping; local paths never leave the Runner configuration file.
+
+### Trusted Native Runner mode
+
+Trusted Native mode is default-off and must be enabled twice for one exact Project repository:
+
+1. On the Runner machine, rerun `setup --trusted-native` from that repository, or use `map ... --trusted-native`. This creates a local Ed25519 signing identity, advertises protocol v3 capabilities, and keeps the private key only in the owner-readable credentials file.
+2. In Takonaut, open the Profile's **Tools & Executors** page and publish a trust policy for that Runner–repository binding. Autonomous protected actions require a second explicit switch there plus an exact Profile tool grant set to **Automatic**.
+
+```bash
+cd /absolute/path/to/repository
+tako-runner setup --url https://takonaut.app --trusted-native
+
+# Return this local binding to standard read-only Runner mode:
+tako-runner map PROJECT_ID "$PWD" \
+  --repository-id REPOSITORY_ID \
+  --disable-trusted-native
+```
+
+A linked Takonaut GitHub integration remains mandatory. The model never receives GitHub tokens, PATs, SSH agents, the Runner private key, or a shell. GitHub mutations pass through a narrow local `gh api` broker only after the Runner verifies a repository/SHA-bound, five-minute, one-time Takonaut permit. The Runner signs the result receipt, and Takonaut independently checks the result through its linked GitHub App. Missing or stale trust, capabilities, repository identity, lease evidence, or Profile autonomy returns the action to the Review queue.
 
 Start the per-user background service:
 
@@ -110,8 +128,8 @@ brew update && brew upgrade tako-runner
 
 Logs are written to `$(brew --prefix)/var/log/tako-runner.log`.
 
-Use **Settings → Agent Operations → Runners** in Takonaut to inspect health,
-capacity, repository/Agent mappings, and credentials. Use **Agent Runs** for
+Use **Settings → Execution → Runners** in Takonaut to inspect health,
+capacity, repository and Agent Profile mappings, and credentials. Use **Runs** for
 immutable revision, publication, retry, and lifecycle history. Failed external
 publications can be retried there from stored findings without rerunning Pi.
 
@@ -135,15 +153,16 @@ bun link
 
 Run `tako-runner setup --url https://takonaut.app` from the repository the
 machine will analyze. Use the lower-level `enroll`, `configure`, and `map`
-commands only for scripted fleet provisioning with complete repository,
-Project, and Agent identifiers.
+commands only for scripted fleet provisioning with complete repository and
+Project identifiers. Agent Profile eligibility is configured in Takonaut.
 
 ## Configuration
 
 Public configuration is stored at `~/.takonaut/runner.json`. The machine
-credential is stored separately at
-`~/.takonaut/runner-credentials.json`. Both files and their parent directory
-are ownership-checked; credentials must remain mode `0600`.
+credential and optional Trusted Native Ed25519 private key are stored separately
+at `~/.takonaut/runner-credentials.json`. Only the public key and key ID appear
+in the public configuration. Both files and their parent directory are
+ownership-checked; credentials must remain mode `0600`.
 
 The Runner refuses root execution, non-HTTPS servers except explicit loopback
 development URLs, symlinked configuration paths, wrong ownership, and
