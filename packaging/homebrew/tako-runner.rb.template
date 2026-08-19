@@ -14,6 +14,16 @@ class TakoRunner < Formula
 
   def install
     system "bun", "install", "--production", "--frozen-lockfile"
+
+    native_root = "node_modules/@earendil-works/pi-tui/native"
+    rm_r "#{native_root}/win32"
+    if OS.mac?
+      incompatible_arch = Hardware::CPU.arm? ? "darwin-x64" : "darwin-arm64"
+      rm_r "#{native_root}/darwin/prebuilds/#{incompatible_arch}"
+    else
+      rm_r "#{native_root}/darwin"
+    end
+
     libexec.install Dir["*"]
 
     (bin/"tako-runner").write <<~SH

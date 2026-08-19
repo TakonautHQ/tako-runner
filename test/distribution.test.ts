@@ -34,6 +34,12 @@ describe("Homebrew distribution", () => {
 		expect(formula).toContain("releases/download/v0.1.0/tako-runner-0.1.0.tgz");
 		expect(formula).toContain(`sha256 "${sha}"`);
 		expect(formula).toContain('depends_on "bun"');
+		expect(formula).toContain(
+			'native_root = "node_modules/@earendil-works/pi-tui/native"',
+		);
+		expect(formula).toContain('rm_r "#{native_root}/win32"');
+		expect(formula).toContain("incompatible_arch = Hardware::CPU.arm?");
+		expect(formula).toContain('rm_r "#{native_root}/darwin"');
 		expect(formula).toContain("service do");
 		expect(formula).toContain('run [opt_bin/"tako-runner", "start"]');
 	});
