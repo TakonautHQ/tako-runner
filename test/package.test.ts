@@ -111,6 +111,17 @@ describe("standalone package", () => {
 		}
 	});
 
+	it("publishes signed-off tag assets as a public GitHub release", () => {
+		const releaseWorkflow = readFileSync(
+			join(root, ".github", "workflows", "release.yml"),
+			"utf8",
+		);
+		expect(releaseWorkflow).toContain("contents: write");
+		expect(releaseWorkflow).toContain("GH_TOKEN: ${{ github.token }}");
+		expect(releaseWorkflow).toContain('gh release create "$GITHUB_REF_NAME"');
+		expect(releaseWorkflow).toContain("--notes-from-tag");
+	});
+
 	it("runs from a production-only packed installation", () => {
 		const temporaryRoot = mkdtempSync(join(tmpdir(), "tako-runner-pack-"));
 		temporaryRoots.push(temporaryRoot);
