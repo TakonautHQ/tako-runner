@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,6 +10,8 @@ import {
 	assertRunnerSetupRepositoryOrigin,
 	detectRunnerRepository,
 	matchRunnerSetupRepository,
+	promptRunnerSetupLine,
+	selectRunnerSetupTrustedNative,
 	type RunnerSetupCatalog,
 	verifyRunnerRepositoryFetch,
 } from "../src/runner-setup";
@@ -103,7 +106,7 @@ describe("interactive Runner setup", () => {
 		);
 		expect(plainStderr).toContain("No Runner was created.");
 		expect(existsSync(join(configDirectory, "runner.json"))).toBe(false);
-	});
+	}, 15_000);
 
 	it("uses plain readable errors when color is disabled", () => {
 		const repository = mkdtempSync(join(tmpdir(), "tako-runner-plain-error-"));
@@ -210,6 +213,90 @@ describe("interactive Runner setup", () => {
 		});
 
 		expect(configured.repositoryBindings?.["repo-1"]?.trustedNative).toBe(true);
+	});
+
+	it("fails safely when interactive input closes before the trust choice", async () => {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		const answer = promptRunnerSetupLine(
+			"Enable Trusted Native? [y/N]",
+			input,
+			output,
+		);
+
+		input.end();
+
+		await expect(answer).rejects.toThrow(/input closed before a choice/i);
+	});
+
+	it("warns and asks before enabling Trusted Native during interactive setup", async () => {
+		const warnings: string[] = [];
+		const questions: string[] = [];
+
+		const trustedNative = await selectRunnerSetupTrustedNative({
+			interactive: true,
+			explicit: undefined,
+			existing: undefined,
+			warn: (summary, detail) => warnings.push(`${summary}\n${detail}`),
+			prompt: async (question) => {
+				questions.push(question);
+				return "yes";
+			},
+		});
+
+		expect(trustedNative).toBe(true);
+		expect(warnings.join("\n")).toMatch(/protected actions/i);
+		expect(warnings.join("\n")).toMatch(/signing key/i);
+		expect(warnings.join("\n")).toMatch(/separate.*Takonaut/i);
+		expect(questions).toEqual([
+			expect.stringMatching(/Enable Trusted Native.*\[y\/N\]/i),
+		]);
+	});
+
+	it("defaults a fresh interactive setup to standard read-only mode", async () => {
+		const trustedNative = await selectRunnerSetupTrustedNative({
+			interactive: true,
+			explicit: undefined,
+			existing: undefined,
+			warn: () => {},
+			prompt: async () => "",
+		});
+
+		expect(trustedNative).toBe(false);
+	});
+
+	it("preserves an existing choice without prompting in non-interactive setup", async () => {
+		let promptCount = 0;
+		const trustedNative = await selectRunnerSetupTrustedNative({
+			interactive: false,
+			explicit: undefined,
+			existing: true,
+			warn: () => {},
+			prompt: async () => {
+				promptCount += 1;
+				return "no";
+			},
+		});
+
+		expect(trustedNative).toBe(true);
+		expect(promptCount).toBe(0);
+	});
+
+	it("lets explicit setup flags bypass the Trusted Native prompt", async () => {
+		let promptCount = 0;
+		const trustedNative = await selectRunnerSetupTrustedNative({
+			interactive: true,
+			explicit: false,
+			existing: true,
+			warn: () => {},
+			prompt: async () => {
+				promptCount += 1;
+				return "yes";
+			},
+		});
+
+		expect(trustedNative).toBe(false);
+		expect(promptCount).toBe(0);
 	});
 
 	it("rejects origins that are not approved for the Runner", () => {

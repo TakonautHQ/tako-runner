@@ -25,6 +25,8 @@ import {
 	assertRunnerSetupRepositoryOrigin,
 	detectRunnerRepository,
 	matchRunnerSetupRepository,
+	promptRunnerSetupLine,
+	selectRunnerSetupTrustedNative,
 	verifyRunnerRepositoryFetch,
 	type DetectedRunnerRepository,
 } from "./runner-setup";
@@ -80,7 +82,7 @@ function printWarning(summary: string, detail: string): void {
 
 function usage(): never {
 	console.error(`Usage:
-  tako-runner setup [--url URL] [--org ORG_ID] [--path REPOSITORY_ROOT] [--repository-id ID] [--project-id ID] [--trusted-native] [--start-service] [--force]
+  tako-runner setup [--url URL] [--org ORG_ID] [--path REPOSITORY_ROOT] [--repository-id ID] [--project-id ID] [--trusted-native|--disable-trusted-native] [--start-service] [--force]
   tako-runner configure --url URL --org ORG_ID [--poll-ms 2000] [--lease-seconds 90]
   tako-runner enroll [--url URL] [--name NAME] [--capacity 1] [--force]
   tako-runner login [enroll options]
@@ -317,15 +319,22 @@ async function setup(args: string[]): Promise<void> {
 		);
 	}
 	verifyRunnerRepositoryFetch(detected.root);
+	let explicitTrustedNative: boolean | undefined;
+	if (args.includes("--trusted-native")) explicitTrustedNative = true;
+	else if (args.includes("--disable-trusted-native"))
+		explicitTrustedNative = false;
+	const trustedNative = await selectRunnerSetupTrustedNative({
+		interactive: process.stdin.isTTY === true && process.stderr.isTTY === true,
+		explicit: explicitTrustedNative,
+		existing: existing?.trustedNative,
+		warn: printWarning,
+		prompt: promptRunnerSetupLine,
+	});
 	const configured = applyRunnerSetupSelection(config, {
 		projectId: match.projectId,
 		repositoryId: match.repository.id,
 		repositoryPath: detected.root,
-		trustedNative: args.includes("--trusted-native")
-			? true
-			: args.includes("--disable-trusted-native")
-				? false
-				: existing?.trustedNative,
+		trustedNative,
 	});
 	saveRunnerDaemonConfig(configured);
 	await new RunnerApiClient(configured).advertiseCapabilities();

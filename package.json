@@ -1,6 +1,6 @@
 {
   "name": "@takonaut/tako-runner",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Customer-managed Takonaut Project Agent Runner powered by Pi",
   "license": "Apache-2.0",
   "type": "module",

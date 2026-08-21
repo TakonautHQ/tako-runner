@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { normalizeGitHubRemote } from "./git";
 import type { RunnerDaemonConfig } from "./runner";
 
@@ -41,6 +42,14 @@ export interface DetectedRunnerRepository {
 	root: string;
 	origin: string;
 	normalizedOrigin: string;
+}
+
+export interface RunnerSetupTrustedNativePrompt {
+	interactive: boolean;
+	explicit: boolean | undefined;
+	existing: boolean | undefined;
+	warn: (summary: string, detail: string) => void;
+	prompt: (question: string) => Promise<string>;
 }
 
 function setupFailure(
@@ -112,6 +121,71 @@ export function assertRunnerSetupRepositoryOrigin(
 	if (normalized !== expected) {
 		throw new Error(
 			`Selected repository ${expected} does not match the detected origin ${normalized || "unknown"}`,
+		);
+	}
+}
+
+export async function promptRunnerSetupLine(
+	question: string,
+	input: NodeJS.ReadableStream = process.stdin,
+	output: NodeJS.WritableStream = process.stderr,
+): Promise<string> {
+	const terminal = createInterface({ input, output });
+	try {
+		return await new Promise<string>((resolve, reject) => {
+			let settled = false;
+			const rejectClosed = (cause?: unknown): void => {
+				if (settled) return;
+				settled = true;
+				reject(
+					new Error(
+						"Interactive input closed before a choice was made. Rerun setup and choose Trusted Native explicitly.",
+						cause === undefined ? undefined : { cause },
+					),
+				);
+			};
+			const onClose = (): void => rejectClosed();
+			terminal.once("close", onClose);
+			void terminal.question(`${question} `).then(
+				(answer) => {
+					if (settled) return;
+					settled = true;
+					terminal.off("close", onClose);
+					resolve(answer);
+				},
+				(error: unknown) => rejectClosed(error),
+			);
+		});
+	} finally {
+		terminal.close();
+	}
+}
+
+export async function selectRunnerSetupTrustedNative({
+	interactive,
+	explicit,
+	existing,
+	warn,
+	prompt,
+}: RunnerSetupTrustedNativePrompt): Promise<boolean | undefined> {
+	if (explicit !== undefined) return explicit;
+	if (!interactive) return existing;
+
+	warn(
+		"Trusted Native can execute protected actions",
+		"Enabling it creates a local Ed25519 signing key and advertises native GitHub capabilities. Protected actions still require a separate trust policy in Takonaut, and autonomous protected actions remain a separate approval. Enable it only on a machine and repository you trust.",
+	);
+	const defaultEnabled = existing === true;
+	const question = `Enable Trusted Native execution for this repository? ${defaultEnabled ? "[Y/n]" : "[y/N]"}`;
+	while (true) {
+		const response = await prompt(question);
+		const answer = response.trim().toLowerCase();
+		if (!answer) return defaultEnabled;
+		if (answer === "y" || answer === "yes") return true;
+		if (answer === "n" || answer === "no") return false;
+		warn(
+			"Please answer yes or no",
+			"Enter y to enable Trusted Native or n to keep standard read-only Runner mode.",
 		);
 	}
 }

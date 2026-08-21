@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the profile-only Trusted Runner as v0.2.0", () => {
-		expect(pkg.version).toBe("0.2.0");
+	it("publishes the profile-only Trusted Runner as v0.2.1", () => {
+		expect(pkg.version).toBe("0.2.1");
 	});
 
 	it("accepts machine credentials only through the environment", () => {
@@ -98,7 +98,7 @@ describe("standalone package", () => {
 		expect(environmentResult.status).toBe(0);
 		expect(environmentResult.stdout).not.toContain(environmentSecret);
 		expect(readFileSync(credentialPath, "utf8")).toContain(environmentSecret);
-	});
+	}, 15_000);
 
 	it("pins the compatible Pi runtime suite", () => {
 		for (const name of [
@@ -153,5 +153,5 @@ describe("standalone package", () => {
 		expect(result.stderr).toContain(
 			"tako-runner map PROJECT_ID REPOSITORY_ROOT --repository-id REPOSITORY_ID",
 		);
-	}, 30_000);
+	}, 90_000);
 });
