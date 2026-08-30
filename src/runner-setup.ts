@@ -52,6 +52,98 @@ export interface RunnerSetupTrustedNativePrompt {
 	prompt: (question: string) => Promise<string>;
 }
 
+export class RunnerRepositoryNotLinkedError extends Error {
+	readonly repository: string;
+
+	constructor(repository: string) {
+		super(`Repository ${repository} is not linked to an approved Project`);
+		this.name = "RunnerRepositoryNotLinkedError";
+		this.repository = repository;
+	}
+}
+
+export interface RunnerRepositoryLinkProject {
+	id: string;
+	name: string;
+	key: string;
+	url: string;
+}
+
+export interface RunnerRepositoryLinkRecovery {
+	repository: string;
+	projects: RunnerRepositoryLinkProject[];
+	automaticProject?: RunnerRepositoryLinkProject;
+}
+
+export function buildRunnerRepositoryLinkRecovery({
+	serverUrl,
+	catalog,
+	origin,
+	explicitProjectId,
+}: {
+	serverUrl: string;
+	catalog: RunnerSetupCatalog;
+	origin: string;
+	explicitProjectId?: string;
+}): RunnerRepositoryLinkRecovery {
+	const repository = normalizeGitHubRemote(origin);
+	if (!repository) {
+		throw new Error("The detected origin is not a supported GitHub remote");
+	}
+	const eligibleProjects = explicitProjectId
+		? catalog.projects.filter((project) => project.id === explicitProjectId)
+		: catalog.projects;
+	const projects = eligibleProjects.map((project) => ({
+		id: project.id,
+		name: project.name,
+		key: project.key,
+		url: new URL(
+			`/projects/${encodeURIComponent(project.key)}/code-integration`,
+			serverUrl,
+		).toString(),
+	}));
+	return {
+		repository,
+		projects,
+		automaticProject: projects.length === 1 ? projects[0] : undefined,
+	};
+}
+
+export function presentRunnerRepositoryLinkRecovery(
+	recovery: RunnerRepositoryLinkRecovery,
+	deps: { log(message: string): void; openUrl(url: string): void },
+): void {
+	deps.log(`Repository ${recovery.repository} is not linked to an approved Project.`);
+	if (recovery.automaticProject) {
+		const project = recovery.automaticProject;
+		deps.log(
+			`Opening Code integration for Project ${project.name} (${project.key}):`,
+		);
+		deps.log(`  ${project.url}`);
+		deps.log(
+			"The Runner will not link the repository automatically. Link it in Takonaut, then rerun setup.",
+		);
+		deps.openUrl(project.url);
+		return;
+	}
+	if (recovery.projects.length === 0) {
+		deps.log(
+			"No approved Project matches --project-id. Verify the Project selection in Takonaut and rerun setup.",
+		);
+	} else {
+		deps.log(
+			"Several approved Projects are available. The Runner cannot safely choose one:",
+		);
+		for (const project of recovery.projects) {
+			deps.log(`  ${project.name} (${project.key}): ${project.url}`);
+			deps.log(`    rerun with --project-id ${project.id}`);
+		}
+	}
+	deps.log(
+		"The Runner will not link the repository automatically. Choose a Project, link it in Takonaut, then rerun setup.",
+	);
+}
+
 function setupFailure(
 	summary: string,
 	why: string,
@@ -99,9 +191,7 @@ export function matchRunnerSetupRepository(
 			})),
 	);
 	if (matches.length === 0) {
-		throw new Error(
-			`Repository ${normalized} is not linked to an approved Project`,
-		);
+		throw new RunnerRepositoryNotLinkedError(normalized);
 	}
 	if (matches.length > 1) {
 		throw new Error(

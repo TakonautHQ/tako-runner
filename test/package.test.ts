@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the profile-only Trusted Runner as v0.2.1", () => {
-		expect(pkg.version).toBe("0.2.1");
+	it("publishes repository-link recovery as v0.2.2", () => {
+		expect(pkg.version).toBe("0.2.2");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

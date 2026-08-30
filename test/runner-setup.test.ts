@@ -9,8 +9,11 @@ import {
 	applyRunnerSetupSelection,
 	assertRunnerSetupRepositoryOrigin,
 	detectRunnerRepository,
+	buildRunnerRepositoryLinkRecovery,
 	matchRunnerSetupRepository,
+	presentRunnerRepositoryLinkRecovery,
 	promptRunnerSetupLine,
+	RunnerRepositoryNotLinkedError,
 	selectRunnerSetupTrustedNative,
 	type RunnerSetupCatalog,
 	verifyRunnerRepositoryFetch,
@@ -299,12 +302,79 @@ describe("interactive Runner setup", () => {
 		expect(promptCount).toBe(0);
 	});
 
+	it("opens the only approved Project Code integration page without linking", () => {
+		const recovery = buildRunnerRepositoryLinkRecovery({
+			serverUrl: "https://takonaut.app",
+			catalog: { ...catalog, projects: [catalog.projects[0]!] },
+			origin: "https://github.com/acme/private.git",
+		});
+		const messages: string[] = [];
+		const opened: string[] = [];
+
+		presentRunnerRepositoryLinkRecovery(recovery, {
+			log: (message) => messages.push(message),
+			openUrl: (url) => opened.push(url),
+		});
+
+		expect(opened).toEqual([
+			"https://takonaut.app/projects/WID/code-integration",
+		]);
+		expect(messages.join("\n")).toContain(
+			"Repository github.com/acme/private is not linked",
+		);
+		expect(messages.join("\n")).toContain(
+			"The Runner will not link the repository automatically",
+		);
+	});
+
+	it("opens the explicitly selected Project when several are approved", () => {
+		const recovery = buildRunnerRepositoryLinkRecovery({
+			serverUrl: "https://takonaut.app/",
+			catalog,
+			origin: "git@github.com:acme/private.git",
+			explicitProjectId: "project-2",
+		});
+		const opened: string[] = [];
+
+		presentRunnerRepositoryLinkRecovery(recovery, {
+			log: () => {},
+			openUrl: (url) => opened.push(url),
+		});
+
+		expect(opened).toEqual([
+			"https://takonaut.app/projects/OTH/code-integration",
+		]);
+	});
+
+	it("prints Project choices instead of guessing when recovery is ambiguous", () => {
+		const recovery = buildRunnerRepositoryLinkRecovery({
+			serverUrl: "https://takonaut.app",
+			catalog,
+			origin: "https://github.com/acme/private.git",
+		});
+		const messages: string[] = [];
+		const opened: string[] = [];
+
+		presentRunnerRepositoryLinkRecovery(recovery, {
+			log: (message) => messages.push(message),
+			openUrl: (url) => opened.push(url),
+		});
+
+		expect(opened).toEqual([]);
+		expect(messages.join("\n")).toContain(
+			"--project-id project-1",
+		);
+		expect(messages.join("\n")).toContain(
+			"https://takonaut.app/projects/OTH/code-integration",
+		);
+	});
+
 	it("rejects origins that are not approved for the Runner", () => {
 		expect(() =>
 			matchRunnerSetupRepository(
 				catalog,
 				"https://github.com/acme/private.git",
 			),
-		).toThrow(/not linked to an approved Project/i);
+		).toThrow(RunnerRepositoryNotLinkedError);
 	});
 });

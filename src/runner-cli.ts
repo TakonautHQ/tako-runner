@@ -23,9 +23,12 @@ import {
 import {
 	applyRunnerSetupSelection,
 	assertRunnerSetupRepositoryOrigin,
+	buildRunnerRepositoryLinkRecovery,
 	detectRunnerRepository,
 	matchRunnerSetupRepository,
+	presentRunnerRepositoryLinkRecovery,
 	promptRunnerSetupLine,
+	RunnerRepositoryNotLinkedError,
 	selectRunnerSetupTrustedNative,
 	verifyRunnerRepositoryFetch,
 	type DetectedRunnerRepository,
@@ -276,8 +279,9 @@ async function setup(args: string[]): Promise<void> {
 
 	const api = new RunnerApiClient(config);
 	const catalog = await api.setupCatalog();
+	const explicitProjectId = value(args, "--project-id");
 	const explicitRepositoryId = value(args, "--repository-id");
-	const explicitMatch = explicitRepositoryId
+	let match = explicitRepositoryId
 		? catalog.projects
 				.flatMap((project) =>
 					project.repositories.map((repository) => ({
@@ -288,16 +292,31 @@ async function setup(args: string[]): Promise<void> {
 				)
 				.find((candidate) => candidate.repository.id === explicitRepositoryId)
 		: undefined;
-	const match = explicitRepositoryId
-		? explicitMatch
-		: matchRunnerSetupRepository(catalog, detected.origin);
+	if (!explicitRepositoryId) {
+		try {
+			match = matchRunnerSetupRepository(catalog, detected.origin);
+		} catch (error) {
+			if (error instanceof RunnerRepositoryNotLinkedError) {
+				const recovery = buildRunnerRepositoryLinkRecovery({
+					serverUrl: config.serverUrl,
+					catalog,
+					origin: detected.origin,
+					explicitProjectId,
+				});
+				presentRunnerRepositoryLinkRecovery(recovery, {
+					log: (message) => console.error(message),
+					openUrl: openBrowser,
+				});
+			}
+			throw error;
+		}
+	}
 	if (!match) {
 		throw new Error("The selected repository is not approved for this Runner");
 	}
 	if (explicitRepositoryId) {
 		assertRunnerSetupRepositoryOrigin(match.repository, detected.origin);
 	}
-	const explicitProjectId = value(args, "--project-id");
 	if (explicitProjectId && explicitProjectId !== match.projectId) {
 		throw new Error("The selected repository does not belong to that Project");
 	}
