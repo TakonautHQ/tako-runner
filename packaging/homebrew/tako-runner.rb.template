@@ -34,6 +34,19 @@ class TakoRunner < Formula
     bin.install_symlink "tako-runner" => "takonaut-runner"
   end
 
+  def caveats
+    <<~EOS
+      If setup did not start the service, start it with:
+        brew services start tako-runner
+
+      After upgrading an existing installation, restart the running service so
+      it loads the newly installed version:
+        brew services restart tako-runner
+
+      If you use another service manager, restart that managed Runner instead.
+    EOS
+  end
+
   service do
     run [opt_bin/"tako-runner", "start"]
     keep_alive true
@@ -42,6 +55,6 @@ class TakoRunner < Formula
   end
 
   test do
-    assert_match "Usage:", shell_output("#{bin}/tako-runner 2>&1", 2)
+    assert_equal "tako-runner #{version}", shell_output("#{bin}/tako-runner --version").strip
   end
 end

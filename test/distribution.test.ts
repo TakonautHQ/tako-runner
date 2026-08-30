@@ -42,5 +42,15 @@ describe("Homebrew distribution", () => {
 		expect(formula).toContain('rm_r "#{native_root}/darwin"');
 		expect(formula).toContain("service do");
 		expect(formula).toContain('run [opt_bin/"tako-runner", "start"]');
+		expect(formula).toContain("If setup did not start the service");
+		expect(formula).toContain("brew services start tako-runner");
+		expect(formula).toContain("After upgrading an existing installation");
+		expect(formula).toContain("brew services restart tako-runner");
+		expect(formula).toContain(
+			"If you use another service manager, restart that managed Runner instead",
+		);
+		expect(formula).toContain(
+			'assert_equal "tako-runner #{version}", shell_output("#{bin}/tako-runner --version").strip',
+		);
 	});
 });

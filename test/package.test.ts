@@ -42,9 +42,37 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes repository-link recovery as v0.2.2", () => {
-		expect(pkg.version).toBe("0.2.2");
+	it("publishes version flags and service guidance as v0.2.3", () => {
+		expect(pkg.version).toBe("0.2.3");
 	});
+
+	it.each(["--version", "-V"])(
+		"prints the package version for %s without loading Runner configuration",
+		(flag) => {
+			const temporaryRoot = mkdtempSync(join(tmpdir(), "tako-runner-version-"));
+			temporaryRoots.push(temporaryRoot);
+			const result = spawnSync(
+				"bun",
+				[join(root, "src", "runner-cli.ts"), flag],
+				{
+					cwd: root,
+					encoding: "utf8",
+					env: {
+						...process.env,
+						TAKONAUT_RUNNER_CONFIG: join(temporaryRoot, "missing.json"),
+						TAKONAUT_RUNNER_CREDENTIALS: join(
+							temporaryRoot,
+							"missing-credentials.json",
+						),
+					},
+				},
+			);
+
+			expect(result.status).toBe(0);
+			expect(result.stdout.trim()).toBe(`tako-runner ${pkg.version}`);
+			expect(result.stderr).toBe("");
+		},
+	);
 
 	it("accepts machine credentials only through the environment", () => {
 		const temporaryRoot = mkdtempSync(join(tmpdir(), "tako-runner-token-"));

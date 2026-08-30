@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
@@ -37,6 +37,21 @@ import {
 function value(args: string[], name: string): string | undefined {
 	const index = args.indexOf(name);
 	return index >= 0 ? args[index + 1] : undefined;
+}
+
+function runnerVersion(): string {
+	const packageJson: unknown = JSON.parse(
+		readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+	);
+	if (
+		typeof packageJson !== "object" ||
+		packageJson === null ||
+		!("version" in packageJson) ||
+		typeof packageJson.version !== "string"
+	) {
+		throw new Error("Runner package version is unavailable");
+	}
+	return packageJson.version;
 }
 
 function cliColorsEnabled(): boolean {
@@ -94,6 +109,7 @@ function usage(): never {
   tako-runner diagnostic-bundle [--output FILE]
   tako-runner once
   tako-runner start
+  tako-runner --version
 
 Every command accepts --allow-unsafe-ancestor ABSOLUTE_PATH as a temporary,
 exact-path override. It must be repeated for each invocation and does not bypass
@@ -460,6 +476,10 @@ function writeDiagnosticBundle(args: string[]): void {
 
 async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
+	if (command === "--version" || command === "-V") {
+		console.log(`tako-runner ${runnerVersion()}`);
+		return;
+	}
 	const unsafeAncestorFlag = "--allow-unsafe-ancestor";
 	const unsafeAncestor = value(args, unsafeAncestorFlag);
 	if (args.includes(unsafeAncestorFlag) && !unsafeAncestor) {

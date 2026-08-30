@@ -122,11 +122,14 @@ tako-runner status
 Useful lifecycle commands:
 
 ```bash
+tako-runner --version
 brew services info tako-runner
 brew services restart tako-runner
 brew services stop tako-runner
 brew update && brew upgrade tako-runner
 ```
+
+A fresh installation only needs the service started once. An already-running Runner must be restarted after an upgrade so its process loads the newly installed version. The Homebrew installation message prints both commands: `brew services start tako-runner` for a stopped or new installation, and `brew services restart tako-runner` after upgrading a running service. If you use launchd, systemd, or another custom service manager, restart that managed Runner instead of starting the standard Homebrew service.
 
 Logs are written to `$(brew --prefix)/var/log/tako-runner.log`.
 
