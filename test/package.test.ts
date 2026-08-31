@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes version flags and service guidance as v0.2.3", () => {
-		expect(pkg.version).toBe("0.2.3");
+	it("publishes version flags and service guidance as v0.2.4", () => {
+		expect(pkg.version).toBe("0.2.4");
 	});
 
 	it.each(["--version", "-V"])(

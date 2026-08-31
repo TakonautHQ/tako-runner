@@ -24,6 +24,7 @@ import {
 	processRunnerClaim,
 	resolveRunnerRepositoryRoot,
 	resolveSafeRunnerPath,
+	runRunnerDaemon,
 	runnerDiffRange,
 	runnerFetchRefspecs,
 	runnerSystemPrompt,
@@ -468,6 +469,60 @@ describe("Runner API client", () => {
 			Authorization: "Bearer short-token",
 			"X-Organization-Id": "org-1",
 		});
+	});
+});
+
+describe("Runner daemon polling", () => {
+	it("advertises capabilities once while continuing to poll for claims", async () => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
+		let claimRequests = 0;
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.endsWith("/api/runner/capabilities")) {
+				return new Response(JSON.stringify({ status: "updated" }), {
+					status: 200,
+				});
+			}
+			if (url.endsWith("/api/runner/claim")) {
+				claimRequests += 1;
+				if (claimRequests === 3) controller.abort();
+				return new Response(null, { status: 204 });
+			}
+			throw new Error(`Unexpected Runner request: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		try {
+			const daemon = runRunnerDaemon(
+				{
+					serverUrl: "https://takonaut.test",
+					organizationId: "org-1",
+					credential: "tkr_machine",
+					pollIntervalMs: 2_000,
+					leaseSeconds: 90,
+					repositories: {},
+					repositoryBindings: {
+						"repo-1": { projectId: "project-1", path: "/work/widget" },
+					},
+				},
+				{ signal: controller.signal },
+			);
+
+			await vi.advanceTimersByTimeAsync(4_000);
+			await daemon;
+
+			const urls = fetchMock.mock.calls.map(([input]) => String(input));
+			expect(
+				urls.filter((url) => url.endsWith("/api/runner/capabilities")),
+			).toHaveLength(1);
+			expect(
+				urls.filter((url) => url.endsWith("/api/runner/claim")),
+			).toHaveLength(3);
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
 	});
 });
 

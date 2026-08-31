@@ -1944,8 +1944,11 @@ export function resolveRunnerRepositoryRoot(
 export async function runRunnerOnce(
 	config: RunnerDaemonConfig,
 	api = new RunnerApiClient(config),
+	options: { advertiseCapabilities?: boolean } = {},
 ): Promise<boolean> {
-	await api.advertiseCapabilities?.();
+	if (options.advertiseCapabilities !== false) {
+		await api.advertiseCapabilities?.();
+	}
 	const claim = await api.claim();
 	if (!claim) return false;
 	let repositoryRoot: string | undefined;
@@ -2014,9 +2017,16 @@ export async function runRunnerDaemon(
 ): Promise<void> {
 	const api = new RunnerApiClient(config);
 	const log = options.log ?? console.log;
+	let capabilitiesAdvertised = false;
 	while (!options.signal?.aborted) {
 		try {
-			const worked = await runRunnerOnce(config, api);
+			if (!capabilitiesAdvertised) {
+				await api.advertiseCapabilities();
+				capabilitiesAdvertised = true;
+			}
+			const worked = await runRunnerOnce(config, api, {
+				advertiseCapabilities: false,
+			});
 			if (!worked) await sleep(config.pollIntervalMs, options.signal);
 		} catch (error) {
 			log(`Runner error: ${errorMessage(error)}`);
