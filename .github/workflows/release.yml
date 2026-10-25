@@ -42,6 +42,9 @@ jobs:
             > "${archive}.sha256"
           bun scripts/render-homebrew-formula.ts \
             "$version" "$sha256" dist/tako-runner.rb
+      - name: Smoke-test graph builds from the packed archive
+        shell: bash
+        run: bun scripts/smoke-packed-graph.ts "dist/tako-runner-${GITHUB_REF_NAME#v}.tgz"
       - name: Preserve release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

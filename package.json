@@ -1,6 +1,6 @@
 {
   "name": "@takonaut/tako-runner",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Customer-managed Takonaut Project Agent Runner powered by Pi",
   "license": "Apache-2.0",
   "type": "module",
@@ -24,6 +24,8 @@
   },
   "files": [
     "src",
+    "grammars",
+    "THIRD_PARTY_NOTICES.md",
     "bun.lock",
     "README.md",
     "LICENSE",
@@ -33,6 +35,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "pack:check": "bun pm pack --dry-run",
+    "smoke:packed": "bun scripts/smoke-packed-graph.ts",
     "formula:render": "bun scripts/render-homebrew-formula.ts"
   },
   "dependencies": {
@@ -40,16 +43,21 @@
     "@earendil-works/pi-ai": "0.84.0",
     "@earendil-works/pi-coding-agent": "0.84.0",
     "@earendil-works/pi-tui": "0.84.0",
-    "typebox": "^1.3.11"
+    "typebox": "^1.3.11",
+    "vite": "^8.3.5",
+    "web-tree-sitter": "0.27.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
   },
   "overrides": {
-    "brace-expansion": "5.0.9",
-    "nanoid": "3.3.18"
+    "brace-expansion": "^5.0.11",
+    "nanoid": "3.3.18",
+    "zod": "^4.6.7",
+    "undici": "^8.10.2"
   },
   "engines": {
     "bun": ">=1.2.0"

@@ -151,6 +151,45 @@ describe("Trusted Native Runner identity and capabilities", () => {
 	});
 });
 
+describe("Mixed trusted and read-only repository bindings", () => {
+	it("advertises base capabilities for read-only repositories so protocol v3 covers every repository", async () => {
+		const root = mkdtempSync(join(tmpdir(), "takonaut-mixed-capability-"));
+		roots.push(root);
+		const paths = {
+			configPath: join(root, "runner.json"),
+			credentialPath: join(root, "runner-credentials.json"),
+		};
+		const config = trustedConfig();
+		config.repositoryBindings = {
+			...config.repositoryBindings,
+			"repo-2": { projectId: "project-1", path: "/work/mobile", trustedNative: false },
+		};
+		saveRunnerDaemonConfig(config, paths);
+		const loaded = loadRunnerDaemonConfig(paths);
+		const fetchMock = vi.fn(
+			async (_input: string | URL | Request, _init?: RequestInit) =>
+				new Response(JSON.stringify({ status: "online" }), { status: 200 }),
+		);
+		await new RunnerApiClient(loaded, fetchMock as typeof fetch).advertiseCapabilities();
+		const body = parseJsonObject(String(fetchMock.mock.calls[0]?.[1]?.body));
+
+		expect(body.protocol_version).toBe(3);
+		expect(body.repository_ids).toEqual(["repo-1", "repo-2"]);
+		expect(body.repository_capabilities).toEqual([
+			{
+				repository_id: "repo-1",
+				capabilities: [
+					"git.detached_worktree",
+					"github.native.v1",
+					"profile_tools.proxy.v1",
+					"receipts.ed25519.v1",
+				],
+			},
+			{ repository_id: "repo-2", capabilities: ["git.detached_worktree"] },
+		]);
+	});
+});
+
 describe("Trusted Native Runner broker", () => {
 	it("executes only an allowlisted GitHub operation for the claimed repository", async () => {
 		const execute = vi.fn(async () => ({

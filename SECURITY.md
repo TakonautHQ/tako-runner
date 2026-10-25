@@ -40,3 +40,11 @@ installs a Tako Bridge or human-session credential. Approve a code only when
 the displayed organization, machine name, capacity, and Project allowlist are
 all expected. If credential delivery is interrupted after enrollment, rotate
 or revoke the reported Runner before retrying.
+
+Connectors run administrator-registered MCP server commands under the Runner's
+account. Register only servers you trust, give them read-only credentials, and
+keep `~/.takonaut/runner-connectors.json` owner-only (the Runner writes it with
+mode 0600). The Runner exposes only tools marked read-only or explicitly
+allowed with `--allow-tool`, strips its own environment from the server
+process, and labels connector output as untrusted data, but it cannot make a
+tool that writes safe.

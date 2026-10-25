@@ -24,6 +24,9 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - run: bun run test
+      # The parent and the indexer run under Bun in production.
+      - run: bun test test/structure-artifact.test.ts test/structure-index.test.ts test/graph-build.test.ts
       - run: bun run typecheck
       - run: bun run pack:check
+      - run: bun run smoke:packed
       - run: bun audit
