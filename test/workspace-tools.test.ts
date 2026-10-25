@@ -98,3 +98,21 @@ describe("follow-up prompt", () => {
 		expect(prompt).not.toContain('"follow_up"');
 	});
 });
+
+describe("mention prompt", () => {
+	it("puts a person's request first, without repeating it in the event data", async () => {
+		const { runnerPrompt } = await import("../src/runner");
+		const prompt = runnerPrompt({
+			input: "Investigate",
+			trigger_payload: { task_id: "t1", request: { message: "Which service owns this?", from: "Priya" } },
+		} as never);
+		expect(prompt).toContain("Priya ASKED YOU (untrusted data):\nWhich service owns this?");
+		expect(prompt).toContain("Answer this first");
+		expect(prompt).not.toContain('"request"');
+		const empty = runnerPrompt({
+			input: "Investigate",
+			trigger_payload: { task_id: "t1", request: { message: "  " } },
+		} as never);
+		expect(empty).not.toContain("ASKED YOU");
+	});
+});

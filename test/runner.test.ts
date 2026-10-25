@@ -530,6 +530,46 @@ describe("Runner daemon polling", () => {
 		}
 	});
 
+	it("keeps one extra loop for Runs a person is waiting for", async () => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("/api/runner/capabilities")) {
+				return new Response(JSON.stringify({ status: "updated" }), { status: 200 });
+			}
+			if (url.endsWith("/api/runner/claim")) {
+				bodies.push(JSON.parse(String(init?.body ?? "{}")));
+				if (bodies.length >= 4) controller.abort();
+				return new Response(null, { status: 204 });
+			}
+			throw new Error(`Unexpected Runner request: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			const daemon = runRunnerDaemon(
+				{
+					serverUrl: "https://takonaut.test",
+					organizationId: "org-1",
+					credential: "tkr_machine",
+					pollIntervalMs: 2_000,
+					leaseSeconds: 90,
+					repositories: {},
+					repositoryBindings: { "repo-1": { projectId: "project-1", path: "/work/widget" } },
+				},
+				{ signal: controller.signal, stopMarkerPath: markerPath(), concurrency: 1, interactiveSlot: true },
+			);
+			await vi.advanceTimersByTimeAsync(4_000);
+			await daemon;
+			expect(bodies.filter((body) => body.interactive_only === true).length).toBeGreaterThan(0);
+			expect(bodies.filter((body) => body.interactive_only === undefined).length).toBeGreaterThan(0);
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
+	});
+
 	const markerRoots: string[] = [];
 	afterEach(() => {
 		for (const root of markerRoots.splice(0))

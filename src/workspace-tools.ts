@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { SAFE_GIT } from "./pr-changes";
 import { isSensitiveSegment } from "./runner-paths";
 import { runSandboxed, type SandboxKind, type SandboxPaths } from "./sandbox";
 
@@ -135,8 +136,11 @@ export function makeWorkspaceTools(options: {
 /** The worktree's changes as a unified diff (untracked files included). */
 export function workspacePatch(worktree: string): string {
 	try {
-		execFileSync("git", ["add", "--intent-to-add", "--all"], { cwd: worktree, stdio: "ignore" });
-		const diff = execFileSync("git", ["diff", "--no-ext-diff", "--no-color"], {
+		// Runs outside the sandbox on a git directory the Agent could write.
+		const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" };
+		execFileSync("git", [...SAFE_GIT, "add", "--intent-to-add", "--all"], { cwd: worktree, stdio: "ignore", env });
+		const diff = execFileSync("git", [...SAFE_GIT, "diff", "--no-ext-diff", "--no-textconv", "--no-color"], {
+			env,
 			cwd: worktree,
 			encoding: "utf8",
 			maxBuffer: 8 * 1024 * 1024,

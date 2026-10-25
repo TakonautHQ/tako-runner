@@ -124,9 +124,15 @@ tako-runner setup \
 unset TAKONAUT_RUNNER_TOKEN
 ```
 
-Run `map` once per repository. Repository-ID bindings support several repositories in the same Project and are advertised to Takonaut before work is claimed. Takonaut alone authorizes execution through the Runner's exact published Agent Profile revision mapping; local paths never leave the Runner configuration file.
+Run `map` once per repository. Repository-ID bindings support several repositories in the same Project and are advertised to Takonaut before work is claimed. Takonaut alone decides which Agents this Runner runs (see [Which Agents a Runner runs](#which-agents-a-runner-runs)); local paths never leave the Runner configuration file.
 
 ### Trusted Native Runner mode
+
+You don't need Trusted Native for Agents to open pull requests or make other
+GitHub changes: Agents propose them, and Takonaut makes them through its
+GitHub App once a person approves (see [Organization tools and
+secrets](#organization-tools-and-secrets)). Trusted Native is the older path
+where this machine calls GitHub itself.
 
 Trusted Native mode is default-off and must be enabled twice for one exact Project repository:
 
@@ -164,7 +170,7 @@ brew update && brew upgrade tako-runner
 Logs are written to `$(brew --prefix)/var/log/tako-runner.log`.
 
 Use **Settings → Execution → Runners** in Takonaut to inspect health,
-capacity, repository and Agent Profile mappings, and credentials. Use **Runs** for
+capacity, repositories, the Agents it runs, and credentials. Use **Runs** for
 immutable revision, publication, retry, and lifecycle history. Failed external
 publications can be retried there from stored findings without rerunning Pi.
 
@@ -177,13 +183,51 @@ tako-runner diagnostic-bundle
 The bundle remains on the Runner and excludes credentials, repository source,
 raw Pi transcripts, tool output, and absolute local paths.
 
-### Repositories and Agent Profiles
+### Repositories
 
 Run `tako-runner setup` inside each repository folder this machine should
-analyze; each run maps one more repository. Then open **Settings → Execution →
-Runners**, choose **Choose Agent Profiles** on the Runner card, and select the
-Profiles it may execute. Mappings follow each Profile's latest published
-revision, so republishing a Profile needs no Runner change.
+analyze; each run maps one more repository.
+
+### Which Agents a Runner runs
+
+Each Agent chooses its Runners on its page in Takonaut, under **Runs on**:
+**Any Runner that can run it** (the default) or **Only these Runners**. A Run
+goes to the least busy allowed Runner that serves the project and repository,
+has every tool the Agent requires with all its secrets set, and has the
+Agent's model. The **Runs on** list shows each Runner and what it lacks.
+
+To keep a machine for particular Agents, such as one with production access,
+turn on **Only run Agents that choose it** on its Runner card. Only Runner
+administrators can then add it to an Agent's **Runs on** list.
+
+This Runner reports what it has (repositories, connectors, ready tools,
+models) when it starts and whenever a tool becomes ready or stops being ready
+(checked every 5 minutes). `brew services restart tako-runner` reports at once.
+
+## Organization tools and secrets
+
+Organization administrators add tools on the **Agents → Tools** tab in
+Takonaut (CloudWatch, Sentry, an API call, a script…) and install them on
+Runners. The Runner fetches its tools; a tool is ready once every secret it
+uses is set on this machine. Values never leave the machine and are redacted
+from everything the Runner reports or shows a model.
+
+```bash
+tako-runner tools                       # tools on this Runner and whether each is ready
+tako-runner secrets                     # secrets set here and the ones tools still need
+tako-runner secrets set ADMIN_API_TOKEN # prompts; value not echoed
+tako-runner secrets import --env-file ./runner.env
+tako-runner tools test look-up-order --arg order_id=ORD-1182
+```
+
+Secrets live in the owner-only file `~/.takonaut/secrets.json`. `--keychain`
+stores one in the macOS Keychain instead, but the background service can't
+answer Keychain prompts, so prefer the file for `brew services`.
+`tako-runner doctor` reads every secret the way the service does.
+
+A tool marked **Changes** never runs during a Run: the Agent proposes the
+call, and the Runner makes it only after a person approves, with a
+single-use permit for exactly those arguments.
 
 ## Connectors (logs and other outside evidence)
 
@@ -205,11 +249,11 @@ tako-runner connector list              # names and env variable names only
 brew services restart tako-runner       # advertise it to Takonaut
 ```
 
-After the restart, open the Agent Profile's **Tools** page in Takonaut. The
-connector appears under **Runner connectors** as `Aws Logs (Runner connector)`;
-enable it for each Profile that should read those logs.
+After the restart, open the Agent's **Tools & permissions** page in Takonaut.
+The connector appears under **Runner connectors** as `Aws Logs (Runner
+connector)`; enable it for each Agent that should read those logs.
 
-During a Run, only connectors the Profile grants are started. Only tools the
+During a Run, only connectors the Agent is granted are started. Only tools the
 server marks read-only (MCP `readOnlyHint`) are offered to the model unless you
 allow a tool by name with `--allow-tool`. The server gets a minimal environment
 (`PATH`, `HOME`, locale, and the `--env` values), never the Runner's own.
@@ -229,7 +273,7 @@ bun link
 Run `tako-runner setup --url https://takonaut.app` from the repository the
 machine will analyze. Use the lower-level `enroll`, `configure`, and `map`
 commands only for scripted fleet provisioning with complete repository and
-Project identifiers. Agent Profile eligibility is configured in Takonaut.
+Project identifiers. Which Agents run on it is configured in Takonaut.
 
 ## Configuration
 

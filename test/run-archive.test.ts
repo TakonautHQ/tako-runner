@@ -47,3 +47,44 @@ describe("Run archive", () => {
 		expect(existsSync(dir!)).toBe(false);
 	});
 });
+
+describe("tool limits", () => {
+	it("refuses calls over the per-Run and per-minute limits, with a message", async () => {
+		const { RunRecorder, ToolLimitError, limitKey } = await import("../src/run-archive");
+		expect(limitKey("runner_grep")).toBe("code.read");
+		expect(limitKey("runner_shell")).toBe("code.change");
+		expect(limitKey("aws-logs__filter_log_events")).toBe("connector.aws-logs");
+		expect(limitKey("agent_get_task")).toBeNull();
+
+		let clock = 0;
+		const recorder = new RunRecorder({ "connector.aws-logs": [3, 2] }, () => clock);
+		const tool = recorder.wrap({ name: "aws-logs__query", execute: async () => "rows" });
+		await tool.execute();
+		await tool.execute();
+		await expect(tool.execute()).rejects.toThrow(/at most 2 times a minute/);
+		clock = 61_000;
+		await tool.execute();
+		await expect(tool.execute()).rejects.toBeInstanceOf(ToolLimitError);
+		await expect(tool.execute()).rejects.toThrow(/at most 3 times in one Run/);
+		expect(recorder.metrics("").toolCalls).toBe(3);
+		expect(recorder.events.filter((event) => event.limited)).toHaveLength(3);
+
+		const takonaut = recorder.wrap({ name: "agent_get_task", execute: async () => "task" });
+		for (let i = 0; i < 50; i++) await takonaut.execute();
+	});
+});
+
+describe("model capabilities", () => {
+	it("lists each model, or the whole provider when it has many", async () => {
+		const { modelCapabilities } = await import("../src/runner");
+		const many = Array.from({ length: 25 }, (_, i) => ({ provider: "OpenRouter", id: `m-${i}` }));
+		expect(
+			modelCapabilities([
+				{ provider: "openai-codex", id: "GPT-5.5" },
+				{ provider: "anthropic", id: "claude-opus-5-5" },
+				{ provider: "bad provider", id: "x" },
+				...many,
+			]),
+		).toEqual(["model.anthropic/claude-opus-5-5", "model.openai-codex/gpt-5.5", "model.openrouter/*"]);
+	});
+});

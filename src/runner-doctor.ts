@@ -30,6 +30,8 @@ export interface DoctorProbes {
 	home: string;
 	/** "macos" / "bwrap" when Agents can get a sandboxed shell. */
 	sandbox?: () => string | null;
+	/** One check per organization tool installed on this Runner. */
+	toolChecks?: () => Promise<DoctorCheck[]>;
 }
 
 const PRIVACY_PROTECTED = ["Desktop", "Documents", "Downloads"];
@@ -201,6 +203,14 @@ export async function runDoctor(probes: DoctorProbes): Promise<DoctorCheck[]> {
 			detail: message(error),
 			fix: "tako-runner connector list",
 		});
+	}
+
+	if (probes.toolChecks) {
+		try {
+			checks.push(...(await probes.toolChecks()));
+		} catch (error) {
+			add({ name: "Tools", level: "warn", detail: message(error), fix: "tako-runner tools" });
+		}
 	}
 
 	if (probes.sandbox) {

@@ -16,7 +16,33 @@ export interface ToolEvent {
 	ok: boolean;
 	ms: number;
 	at: string;
+	/** The call was refused because the tool reached its limit. */
+	limited?: boolean;
 }
+
+/** [max calls per Run, max calls per minute], keyed by `code.read`, `code.change` or `connector.<name>`. */
+export type ToolLimits = Record<string, readonly number[]>;
+
+const CODE_READ = new Set(["runner_read", "runner_list", "runner_find", "runner_grep", "runner_git_diff"]);
+const CODE_CHANGE = new Set(["runner_shell", "runner_edit", "runner_write"]);
+// Used when Takonaut sends no limits (older servers).
+const FALLBACK_LIMITS: ToolLimits = {
+	"code.read": [300, 120],
+	"code.change": [100, 60],
+	connector: [25, 10],
+};
+
+/** Which limit applies to a tool; Takonaut tools are limited by Takonaut. */
+export function limitKey(toolName: string): string | null {
+	if (CODE_READ.has(toolName)) return "code.read";
+	if (CODE_CHANGE.has(toolName)) return "code.change";
+	// Organization tools: t_<key> and t_<key>__<connector tool>.
+	if (toolName.startsWith("t_")) return `tool.${toolName.slice(2).split("__")[0]?.replace(/_/g, "-")}`;
+	const split = toolName.indexOf("__");
+	return split > 0 ? `connector.${toolName.slice(0, split)}` : null;
+}
+
+export class ToolLimitError extends Error {}
 
 export interface RunMetrics {
 	toolCalls: number;
@@ -28,12 +54,46 @@ export interface RunMetrics {
 export class RunRecorder {
 	readonly events: ToolEvent[] = [];
 	private readonly started = Date.now();
+	private readonly calls = new Map<string, number[]>();
 
-	/** Wrap a tool so every call is counted and timed. */
+	constructor(
+		private readonly limits: ToolLimits = {},
+		private readonly now: () => number = Date.now,
+	) {}
+
+	private limitFor(key: string): readonly number[] | undefined {
+		return this.limits[key] ?? FALLBACK_LIMITS[key] ?? (key.startsWith("connector.") ? FALLBACK_LIMITS.connector : undefined);
+	}
+
+	/** Count one call against the tool's limits, or refuse it with a message the model can act on. */
+	private admit(toolName: string): void {
+		const key = limitKey(toolName);
+		const limit = key ? this.limitFor(key) : undefined;
+		if (!key || !limit) return;
+		const [perRun, perMinute] = limit;
+		const now = this.now();
+		const history = this.calls.get(key) ?? [];
+		const refuse = (message: string) => {
+			this.events.push({ tool: toolName, ok: false, ms: 0, at: new Date(now).toISOString(), limited: true });
+			throw new ToolLimitError(message);
+		};
+		if (perRun !== undefined && history.length >= perRun) {
+			refuse(`Tool limit reached: ${toolName} may be called at most ${perRun} times in one Run. Continue with what you have.`);
+		}
+		const lastMinute = history.filter((at) => now - at < 60_000).length;
+		if (perMinute !== undefined && lastMinute >= perMinute) {
+			refuse(`Tool limit reached: ${toolName} may be called at most ${perMinute} times a minute. Wait, or continue with what you have.`);
+		}
+		history.push(now);
+		this.calls.set(key, history);
+	}
+
+	/** Wrap a tool so every call is counted, timed and kept within its limits. */
 	wrap<T extends { name: string; execute: (...args: never[]) => unknown }>(tool: T): T {
 		const original = tool.execute as (...args: unknown[]) => Promise<unknown>;
 		const recorder = this;
 		const execute = async function (this: unknown, ...args: unknown[]) {
+			recorder.admit(tool.name);
 			const began = Date.now();
 			try {
 				const result = await original.apply(this, args);
@@ -49,7 +109,7 @@ export class RunRecorder {
 
 	metrics(patch: string): RunMetrics {
 		return {
-			toolCalls: this.events.length,
+			toolCalls: this.events.filter((event) => !event.limited).length,
 			commandsRun: this.events.filter((event) => event.tool === "runner_shell").length,
 			changesMade: (patch.match(/^diff --git /gm) ?? []).length,
 			durationSeconds: Math.round((Date.now() - this.started) / 1000),

@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { SECRETS_USAGE, secretsCommand, toolsCommand } from "./tools-cli";
+import { doctorToolChecks } from "./tools/catalog";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -138,6 +140,7 @@ function usage(): never {
   tako-runner clear-stop   (after checking for leftover Runner/Pi processes)
   tako-runner connector add NAME [--description TEXT] [--env KEY=VALUE]... [--allow-tool TOOL]... [--timeout-ms N] -- COMMAND [ARGS...]
   tako-runner connector list | test NAME | remove NAME
+${SECRETS_USAGE}
 
 Every command accepts --allow-unsafe-ancestor ABSOLUTE_PATH as a temporary,
 exact-path override. It must be repeated for each invocation and does not bypass
@@ -352,6 +355,7 @@ async function doctorChecks(): Promise<DoctorCheck[]> {
 		freeBytes,
 		connectorNames: () => Object.keys(loadConnectors()),
 		sandbox: () => detectSandbox(),
+		toolChecks: () => doctorToolChecks(),
 	});
 }
 
@@ -736,6 +740,14 @@ async function main(): Promise<void> {
 		await connectorCommand(args);
 		return;
 	}
+	if (command === "secrets") {
+		await secretsCommand(args);
+		return;
+	}
+	if (command === "tools") {
+		await toolsCommand(args);
+		return;
+	}
 	if (command === "setup") {
 		await setup(args);
 		return;
@@ -856,9 +868,13 @@ async function main(): Promise<void> {
 		}
 		const pruned = pruneRunArchive();
 		if (pruned > 0) console.error(`Runner removed ${pruned} archived Run(s) past retention`);
-		console.error(`Runner ${RUNNER_VERSION} started; up to ${concurrency} Run(s) at once`);
+		console.error(
+			`Runner ${RUNNER_VERSION} started; up to ${concurrency} Run(s) at once, plus one for Runs a person is waiting for`,
+		);
 		await runRunnerDaemon(config, {
 			concurrency,
+			interactiveSlot: true,
+			control: true,
 			signal: controller.signal,
 			log: (message) => console.error(message),
 			runGraphOnce,

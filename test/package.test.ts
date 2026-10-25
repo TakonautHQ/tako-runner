@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the self-provisioning, sandboxed Runner as v0.3.0", () => {
-		expect(pkg.version).toBe("0.3.0");
+	it("publishes the Runner with tools, chat, approvals and live Runs as v0.6.0", () => {
+		expect(pkg.version).toBe("0.6.0");
 	});
 
 	it("accepts machine credentials only through the environment", () => {
