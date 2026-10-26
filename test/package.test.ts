@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner with tools, chat, approvals and live Runs as v0.6.0", () => {
-		expect(pkg.version).toBe("0.6.0");
+	it("publishes the Runner with model endpoints and a default model as v0.6.1", () => {
+		expect(pkg.version).toBe("0.6.1");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

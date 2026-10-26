@@ -57,6 +57,7 @@ import { RUNNER_VERSION } from "./version";
 import { RunRecorder, type RunMetrics, writeRunArchive } from "./run-archive";
 import { type ChatTurn, chatPrompt, pruneChats, throttle, warmSession } from "./chat";
 import { checkFields, fieldsPrompt, outputFields } from "./output-fields";
+import { chooseModel, openRunnerModels, usableModels } from "./models";
 import {
 	collectPrChanges,
 	PR_TOOL,
@@ -2375,8 +2376,15 @@ export function modelCapabilities(models: readonly { provider: string; id: strin
 async function localModelCapabilities(): Promise<string[]> {
 	if (process.env.TAKONAUT_RUNNER_ADVERTISE_MODELS === "0") return [];
 	try {
-		const runtime = await ModelRuntime.create();
-		return modelCapabilities(await runtime.getAvailable());
+		const models = await openRunnerModels();
+		const usable = await usableModels(models);
+		const fallback = models.settings.default?.toLowerCase();
+		// Tells Takonaut which model Agents without a choice get here.
+		const defaultCapability =
+			fallback && usable.some((model) => `${model.provider}/${model.id}`.toLowerCase() === fallback)
+				? [`model.default:${fallback}`]
+				: [];
+		return [...defaultCapability, ...modelCapabilities(usable)].filter((item) => /^model\.[a-z0-9._\-/:*]{1,122}$/.test(item));
 	} catch (error) {
 		console.error(`Runner models not advertised: ${errorMessage(error)}`);
 		return [];
@@ -2741,20 +2749,13 @@ export async function runPiAnalysis(
 	}
 	try {
 		const preference = modelPreference(claim.definition_snapshot.agent_profile_snapshot);
-		let model: Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number] | undefined;
-		if (preference.provider && preference.modelId) {
-			const runtime = await ModelRuntime.create();
-			model = (await runtime.getAvailable()).find(
-				(candidate) =>
-					candidate.provider === preference.provider && candidate.id === preference.modelId,
-			);
-			if (!model) {
-				console.error(
-					`Model ${preference.provider}/${preference.modelId} is not available on this Runner; using the default`,
-				);
-			}
-		}
+		// Pi's providers plus this Runner's endpoints; the Runner default when
+		// the Agent doesn't choose a model (or this machine doesn't have it).
+		const runnerModels = await openRunnerModels();
+		const { model, note } = await chooseModel(runnerModels, preference);
+		if (note) console.error(note);
 		({ session } = await createAgentSession({
+			modelRuntime: runnerModels.modelRuntime,
 			...(model ? { model } : {}),
 			...(preference.thinking ? { thinkingLevel: preference.thinking } : {}),
 			cwd,

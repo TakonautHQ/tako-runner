@@ -204,6 +204,29 @@ This Runner reports what it has (repositories, connectors, ready tools,
 models) when it starts and whenever a tool becomes ready or stops being ready
 (checked every 5 minutes). `brew services restart tako-runner` reports at once.
 
+## Models
+
+A Runner uses the models Pi is signed in to on this machine, plus any
+OpenAI-compatible endpoint you add. It reports the ones it can use to
+Takonaut, so Agents that choose a model go to a Runner that has it.
+
+```bash
+tako-runner models                              # what this Runner can use and its default
+tako-runner models add litellm --from-pi        # reuse Pi's LiteLLM login (URL and key)
+tako-runner models add ollama --base-url http://localhost:11434/v1
+tako-runner models add router --base-url https://openrouter.ai/api/v1 --key-secret OPENROUTER_KEY
+tako-runner models default litellm/gpt-6.1-sol  # for Agents that don't choose a model
+tako-runner models test --all                   # stop advertising models your login refuses
+```
+
+Set a default: without one, an Agent that doesn't choose a model gets Pi's
+built-in default, which a login may refuse (for example, a ChatGPT Codex
+login refuses `gpt-5.5`). `tako-runner doctor` warns when there is none.
+Endpoints are configuration only (`~/.takonaut/models.json`); their models
+come from the endpoint's `/models` list and no third-party code runs.
+`models test --all` treats timeouts and rate limits as "not sure" and keeps
+those models. Restart the service after changes.
+
 ## Organization tools and secrets
 
 Organization administrators add tools on the **Agents → Tools** tab in

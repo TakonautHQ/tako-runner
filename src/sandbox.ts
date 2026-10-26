@@ -39,6 +39,7 @@ export const SECRET_PATHS = [
 	".takonaut/runner-connectors.json",
 	".takonaut/secrets.json",
 	".takonaut/tools.json",
+	".takonaut/models.json",
 	".takonaut/chats",
 	".takonaut/paused",
 	".takonaut/runs",

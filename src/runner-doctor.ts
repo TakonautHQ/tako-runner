@@ -32,6 +32,8 @@ export interface DoctorProbes {
 	sandbox?: () => string | null;
 	/** One check per organization tool installed on this Runner. */
 	toolChecks?: () => Promise<DoctorCheck[]>;
+	/** The Runner's default model and endpoint problems. */
+	modelChecks?: () => Promise<DoctorCheck[]>;
 }
 
 const PRIVACY_PROTECTED = ["Desktop", "Documents", "Downloads"];
@@ -120,6 +122,13 @@ export async function runDoctor(probes: DoctorProbes): Promise<DoctorCheck[]> {
 			detail: message(error),
 			fix: "Run pi as this user and use /login",
 		});
+	}
+	if (probes.modelChecks) {
+		try {
+			for (const check of await probes.modelChecks()) add(check);
+		} catch (error) {
+			add({ name: "Default model", level: "warn", detail: message(error) });
+		}
 	}
 
 	if (config) {

@@ -6,6 +6,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { modelDoctorChecks, openRunnerModels } from "./models";
+import { MODELS_USAGE, modelsCommand } from "./models-cli";
 import {
 	defaultRunnerConfigPaths,
 	loadRunnerDaemonConfig,
@@ -141,6 +143,7 @@ function usage(): never {
   tako-runner connector add NAME [--description TEXT] [--env KEY=VALUE]... [--allow-tool TOOL]... [--timeout-ms N] -- COMMAND [ARGS...]
   tako-runner connector list | test NAME | remove NAME
 ${SECRETS_USAGE}
+${MODELS_USAGE}
 
 Every command accepts --allow-unsafe-ancestor ABSOLUTE_PATH as a temporary,
 exact-path override. It must be repeated for each invocation and does not bypass
@@ -245,7 +248,7 @@ async function enroll(args: string[]): Promise<void> {
 async function verifyPiProviderAuthentication(): Promise<string[]> {
 	let modelRuntime: ModelRuntime;
 	try {
-		modelRuntime = await ModelRuntime.create();
+		modelRuntime = (await openRunnerModels()).modelRuntime;
 	} catch (error) {
 		throw new Error(
 			"Pi provider authentication or model configuration could not be read. Run pi as this operating-system user, use /login, then rerun setup.",
@@ -338,6 +341,7 @@ async function doctorChecks(): Promise<DoctorCheck[]> {
 		loadConfig: () => loadRunnerDaemonConfig(),
 		catalog: (config) => new RunnerApiClient(config).setupCatalog(),
 		providers: () => verifyPiProviderAuthentication(),
+		modelChecks: () => modelDoctorChecks(),
 		gitFetchable: (path) => {
 			try {
 				execFileSync("git", ["-C", path, "fetch", "--dry-run", "--no-tags", "origin"], {
@@ -742,6 +746,10 @@ async function main(): Promise<void> {
 	}
 	if (command === "secrets") {
 		await secretsCommand(args);
+		return;
+	}
+	if (command === "models") {
+		await modelsCommand(args);
 		return;
 	}
 	if (command === "tools") {
