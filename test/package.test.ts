@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner with model endpoints and a default model as v0.6.1", () => {
-		expect(pkg.version).toBe("0.6.1");
+	it("publishes the Runner changing several repositories per Run as v0.8.0", () => {
+		expect(pkg.version).toBe("0.8.0");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

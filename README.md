@@ -227,6 +227,33 @@ come from the endpoint's `/models` list and no third-party code runs.
 `models test --all` treats timeouts and rate limits as "not sure" and keeps
 those models. Restart the service after changes.
 
+## Several repositories in one Run
+
+An Agent that reads several repositories gets one Run per event. The Runner
+checks out one repository as the working directory and the others beside it,
+in `~/.takonaut/runner-worktrees/<run>.context/<name>/`, each at the exact
+commit Takonaut sent. The file tools take `repository` to work in any of
+them. Those the Agent may change (all by default; **May change** under
+**Code it reads**) are writable in the sandbox; the rest are read-only, the
+working directory included. `open_pull_request_with_changes` collects the
+changes of every repository the Agent changed; Takonaut opens one linked
+draft pull request in each after a person approves. A repository this machine
+hasn't cloned (`tako-runner setup` in its folder) is reported on the Run page
+and left out. Takonaut prefers a Runner that has all of them.
+
+## Follow-ups
+
+A follow-up on a Run (**Ask the Agent a follow-up** on a ticket or Run page)
+continues the same Pi session when this machine ran the earlier turn, so the
+Agent keeps everything it already read and only gets the new question. It
+runs on the same commit. Takonaut gives the Runner that ran the earlier turn
+the first 60 seconds to take it; another Runner starts from the earlier
+result instead.
+
+Sessions are kept in `~/.takonaut/threads/<thread>/<run>/` (owner-only) for
+24 hours after the last turn (`TAKONAUT_RUNNER_THREAD_HOURS`, `0` keeps none).
+They hold the Agent's tool results, so code it read.
+
 ## Organization tools and secrets
 
 Organization administrators add tools on the **Agents → Tools** tab in

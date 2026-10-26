@@ -6,7 +6,7 @@
  * Endpoints are plain configuration: no third-party code runs in the Runner.
  * Their models are discovered from the endpoint's /models list.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -157,22 +157,90 @@ export interface RunnerModels {
 	errors: string[];
 }
 
-/** A model runtime with Pi's providers plus this Runner's endpoints. */
-export async function openRunnerModels(settings = readModelSettings()): Promise<RunnerModels> {
+const LOCK_STALE_MS = 120_000;
+const LOCK_WAIT_MS = 90_000;
+
+/**
+ * Run `work` while holding this machine's model lock. Runs start in separate
+ * processes, and opening the model list refreshes OAuth logins: two at once
+ * can both spend a single-use refresh token, and the second login fails.
+ */
+export async function withModelLock<T>(work: () => Promise<T>, path = `${modelSettingsPath()}.lock`): Promise<T> {
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	const started = Date.now();
+	for (;;) {
+		try {
+			mkdirSync(path, { mode: 0o700 });
+			break;
+		} catch {
+			try {
+				// A crashed holder's lock is taken over once it is old enough.
+				if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) rmSync(path, { recursive: true, force: true });
+			} catch {
+				// Released meanwhile.
+			}
+			if (Date.now() - started > LOCK_WAIT_MS) break; // Never block a Run forever.
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+	}
+	try {
+		return await work();
+	} finally {
+		rmSync(path, { recursive: true, force: true });
+	}
+}
+
+type RuntimeModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
+
+/**
+ * Signed-in models, provider by provider: one broken login (say, a revoked
+ * Codex token) only removes that provider's models.
+ */
+export async function availableModels(modelRuntime: ModelRuntime, errors?: string[]): Promise<RuntimeModel[]> {
+	try {
+		return [...(await modelRuntime.getAvailable())];
+	} catch {
+		const out: RuntimeModel[] = [];
+		for (const provider of modelRuntime.getProviders()) {
+			try {
+				out.push(...(await modelRuntime.getAvailable(provider.id)));
+			} catch (error) {
+				errors?.push(`${provider.id}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+			}
+		}
+		return out;
+	}
+}
+
+async function openOnce(settings: RunnerModelSettings): Promise<RunnerModels> {
 	const modelRuntime = await ModelRuntime.create();
 	const errors = await registerEndpoints(modelRuntime, settings.endpoints);
-	for (const error of errors) console.error(`Model endpoint ${error}`);
+	// Refresh logins now, inside the lock, so later calls reuse them.
+	await availableModels(modelRuntime, errors);
 	return { modelRuntime, settings, errors };
+}
+
+/** A model runtime with Pi's providers plus this Runner's endpoints. */
+export async function openRunnerModels(settings = readModelSettings()): Promise<RunnerModels> {
+	const models = await withModelLock(async () => {
+		try {
+			return await openOnce(settings);
+		} catch (error) {
+			// Another process may have just refreshed the login; read it again.
+			console.error(`Models not ready, retrying once: ${error instanceof Error ? error.message : String(error)}`);
+			return await openOnce(settings);
+		}
+	});
+	for (const error of models.errors) console.error(`Model endpoint ${error}`);
+	return models;
 }
 
 export const modelKey = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
 
-type RuntimeModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
-
 /** Models this Runner can use: signed in, and not found unusable. */
 export async function usableModels(models: RunnerModels): Promise<RuntimeModel[]> {
 	const unusable = new Set(models.settings.unusable.map((key) => key.toLowerCase()));
-	return (await models.modelRuntime.getAvailable()).filter((model) => !unusable.has(modelKey(model).toLowerCase()));
+	return (await availableModels(models.modelRuntime)).filter((model) => !unusable.has(modelKey(model).toLowerCase()));
 }
 
 /** The model for a Run: the Agent's choice if this Runner has it, else the Runner default. */

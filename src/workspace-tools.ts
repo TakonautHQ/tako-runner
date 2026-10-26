@@ -60,18 +60,53 @@ const text = (value: string) => ({
 	details: {},
 });
 
+/** Another repository of the Run, checked out beside the worktree. */
+export interface WorkspaceRepository {
+	/** What the Agent passes as `repository`. */
+	label: string;
+	/** owner/name */
+	fullName: string;
+	path: string;
+	mayChange: boolean;
+}
+
 export function makeWorkspaceTools(options: {
 	worktree: string;
 	sandbox: SandboxKind;
 	paths: SandboxPaths;
 	signal?: AbortSignal;
+	/** The worktree's repository name, as the Agent may pass it. */
+	worktreeLabel?: string;
+	worktreeMayChange?: boolean;
+	repositories?: WorkspaceRepository[];
 }) {
 	const { worktree } = options;
+	const others = options.repositories ?? [];
+	/** The folder a write goes to; refuses a repository the Agent may only read. */
+	const writableRoot = (repository?: string): string => {
+		const wanted = repository?.trim();
+		const own = !wanted || wanted === options.worktreeLabel || options.worktreeLabel?.endsWith(`/${wanted}`);
+		if (own) {
+			if (options.worktreeMayChange === false) {
+				throw new Error(`${options.worktreeLabel ?? "This repository"} is read-only in this Run`);
+			}
+			return worktree;
+		}
+		const found = others.find(
+			(item) => item.label === wanted || item.fullName === wanted || item.fullName.split("/")[1] === wanted,
+		);
+		if (!found) throw new Error(`Unknown repository ${wanted}`);
+		if (!found.mayChange) throw new Error(`${found.fullName} is read-only in this Run`);
+		return found.path;
+	};
+	const repositoryParam = Type.Optional(
+		Type.String({ description: "Which repository: omit for the working directory's, or the name of another" }),
+	);
 	const shell = defineTool({
 		name: "runner_shell",
 		label: "Run a command",
 		description:
-			"Run a bash command in the repository worktree inside a sandbox: no network, writes only inside the repository, no access to credentials. Use it to run tests, builds, linters, git log/blame/show, and scripts. Install nothing; dependencies that need the network are unavailable.",
+			"Run a bash command in the repository worktree inside a sandbox: no network, writes only inside the repositories you may change, no access to credentials. Use it to run tests, builds, linters, git log/blame/show, and scripts; cd to another repository's folder to work there. Install nothing; dependencies that need the network are unavailable.",
 		parameters: Type.Object({
 			command: Type.String(),
 			timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_COMMAND_SECONDS })),
@@ -92,16 +127,17 @@ export function makeWorkspaceTools(options: {
 		name: "runner_write",
 		label: "Write a file",
 		description:
-			"Create or replace a text file in the repository worktree. Changes become a proposed patch; nothing is committed or pushed.",
-		parameters: Type.Object({ path: Type.String(), content: Type.String() }),
+			"Create or replace a text file in a repository you may change. Changes become a proposed patch; nothing is committed or pushed.",
+		parameters: Type.Object({ path: Type.String(), content: Type.String(), repository: repositoryParam }),
 		execute: async (_id, params) => {
-			const target = safeWorkspacePath(worktree, params.path);
+			const root = writableRoot(params.repository);
+			const target = safeWorkspacePath(root, params.path);
 			if (Buffer.byteLength(params.content) > MAX_WRITE_BYTES) {
 				throw new Error("Files are limited to 256 KiB");
 			}
 			mkdirSync(dirname(target), { recursive: true });
 			writeFileSync(target, params.content);
-			return text(`Wrote ${relative(worktree, target)}`);
+			return text(`Wrote ${relative(root, target)}`);
 		},
 	});
 	const edit = defineTool({
@@ -113,9 +149,11 @@ export function makeWorkspaceTools(options: {
 			path: Type.String(),
 			old_text: Type.String(),
 			new_text: Type.String(),
+			repository: repositoryParam,
 		}),
 		execute: async (_id, params) => {
-			const target = safeWorkspacePath(worktree, params.path);
+			const root = writableRoot(params.repository);
+			const target = safeWorkspacePath(root, params.path);
 			if (statSync(target).size > MAX_WRITE_BYTES) throw new Error("File is too large to edit");
 			const current = readFileSync(target, "utf8");
 			const first = current.indexOf(params.old_text);
@@ -127,10 +165,19 @@ export function makeWorkspaceTools(options: {
 				target,
 				current.slice(0, first) + params.new_text + current.slice(first + params.old_text.length),
 			);
-			return text(`Edited ${relative(worktree, target)}`);
+			return text(`Edited ${relative(root, target)}`);
 		},
 	});
 	return [shell, write, edit];
+}
+
+/** Each changed repository's diff, under its name when there are several. */
+export function workspacePatches(repositories: { label: string; path: string }[]): string {
+	const changed = repositories
+		.map((item) => ({ label: item.label, patch: workspacePatch(item.path) }))
+		.filter((item) => item.patch);
+	if (changed.length <= 1) return changed[0]?.patch ?? "";
+	return changed.map((item) => `# ${item.label}\n${item.patch}`).join("\n");
 }
 
 /** The worktree's changes as a unified diff (untracked files included). */

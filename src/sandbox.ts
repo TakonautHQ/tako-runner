@@ -43,6 +43,7 @@ export const SECRET_PATHS = [
 	".takonaut/chats",
 	".takonaut/paused",
 	".takonaut/runs",
+	".takonaut/threads",
 	".pi",
 	".ssh",
 	".aws",
@@ -71,10 +72,17 @@ export const SECRET_PATHS = [
 
 export interface SandboxPaths {
 	worktree: string;
-	/** Directories the command may write besides the worktree (Git metadata). */
+	/** Directories the command may write besides the worktree (Git metadata, other repositories). */
 	writable: string[];
+	/** The worktree is a repository the Agent may read but not change. */
+	readOnlyWorktree?: boolean;
 	tmp: string;
 	home: string;
+}
+
+/** Where a command may write: the worktree unless it is read-only, temp, and the rest. */
+export function writablePaths(paths: SandboxPaths): string[] {
+	return [...(paths.readOnlyWorktree ? [] : [paths.worktree]), paths.tmp, ...paths.writable];
 }
 
 function sbString(value: string): string {
@@ -89,7 +97,7 @@ export function macosProfile(paths: SandboxPaths): string {
 		"(allow default)",
 		"(deny network*)",
 		"(deny file-write*)",
-		`(allow file-write* ${[paths.worktree, paths.tmp, ...paths.writable]
+		`(allow file-write* ${writablePaths(paths)
 			.map((path) => `(subpath ${sbString(path)})`)
 			.join(" ")} (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/fd/") (regex #"^/dev/tty"))`,
 		`(deny file-read* ${secret.map((path) => `(subpath ${sbString(path)})`).join(" ")})`,
@@ -114,7 +122,7 @@ export function bwrapArgs(paths: SandboxPaths, command: string): string[] {
 	for (const path of SECRET_PATHS.map((p) => join(paths.home, p))) {
 		if (existsSync(path)) args.push("--tmpfs", path);
 	}
-	for (const path of [paths.worktree, paths.tmp, ...paths.writable]) {
+	for (const path of writablePaths(paths)) {
 		args.push("--bind", path, path);
 	}
 	args.push("--chdir", paths.worktree, "/bin/bash", "-c", command);

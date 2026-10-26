@@ -29,9 +29,10 @@ export interface PrChanges {
 }
 
 export const PR_TOOL_DESCRIPTION =
-	"Propose a draft pull request with the changes you made in this copy of the repository. " +
-	"Your changed files are attached automatically; you only give the title and description. " +
-	"A person reviews the exact changes and approves before anything reaches GitHub. " +
+	"Propose draft pull requests with the changes you made in this Run's copies of the repositories. " +
+	"Your changed files in every repository you changed are attached automatically; you only give the title and description. " +
+	"Each changed repository gets its own draft pull request, linked to the others. " +
+	"A person reviews the exact changes and approves them together before anything reaches GitHub. " +
 	"Call it once, when your fix is complete and you have run the tests.";
 
 export const PR_TOOL_PARAMETERS = {
