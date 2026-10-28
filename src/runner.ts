@@ -56,6 +56,12 @@ import { isSensitiveSegment } from "./runner-paths";
 import { RUNNER_VERSION } from "./version";
 import { RunRecorder, type RunMetrics, writeRunArchive } from "./run-archive";
 import { type ChatTurn, chatPrompt, pruneChats, throttle, warmSession } from "./chat";
+import {
+	type AdrSnapshot,
+	planningPrompt,
+	prunePlanningSessions,
+	warmPlanningSession,
+} from "./planning";
 import { checkFields, fieldsPrompt, outputFields } from "./output-fields";
 import { chooseModel, openRunnerModels, usableModels } from "./models";
 import {
@@ -192,8 +198,9 @@ export interface RunnerClaim {
 	tool_limits?: Record<string, number[]>;
 	/** Organization tools this Run's Agent is granted (Takonaut 0.4+). */
 	tools?: CatalogToolSpec[];
-	/** live posts results; test posts nothing; chat answers a conversation. */
-	mode?: "live" | "test" | "chat" | "workflow" | "eval";
+	/** live posts results; test posts nothing; chat answers a conversation;
+	 * planning answers one Grill turn, read-only. */
+	mode?: "live" | "test" | "chat" | "workflow" | "eval" | "planning";
 	conversation_id?: string | null;
 	/** Continuing a Run that paused for an approved change. */
 	resume?: RunnerResume | null;
@@ -213,6 +220,8 @@ export interface RunnerClaim {
 			instructions?: string;
 			tool_grants?: Record<string, unknown>;
 		};
+		/** The ADRs in force, frozen at a planning turn's enqueue time (ADR-0010 B6/B14). */
+		adr_snapshot?: AdrSnapshot | null;
 	};
 	revision_spec: RunnerRevisionSpec;
 	operation_snapshot: Record<string, unknown>;
@@ -2463,6 +2472,9 @@ export function changeableRepositories(
 	cwd: string,
 	claim: RunnerClaim,
 ): { label: string; path: string; repositoryId: string; sha: string }[] {
+	// Planning Runs are read-only (ADR-0010 B6), independent of revision_spec:
+	// never give the Planner a sandbox, a diff to commit, or a PR tool.
+	if (claim.mode === "planning") return [];
 	const out: { label: string; path: string; repositoryId: string; sha: string }[] = [];
 	if (claim.revision_spec?.may_change !== false && claim.reviewed_head_sha) {
 		out.push({
@@ -2727,7 +2739,7 @@ ${connectorNotes.map((note) => `- ${note}`).join("\n")}`
 export function pausesForApproval(claim: RunnerClaim): boolean {
 	const governance = (claim.definition_snapshot.agent_profile_snapshot as { governance?: { pause_for_approval?: unknown } })
 		.governance;
-	return governance?.pause_for_approval === true && !["test", "eval", "chat"].includes(claim.mode ?? "live");
+	return governance?.pause_for_approval === true && !["test", "eval", "chat", "planning"].includes(claim.mode ?? "live");
 }
 
 function pinnedProvider(claim: RunnerClaim): string | null {
@@ -2788,6 +2800,23 @@ export function resumePrompt(resume: RunnerResume): string {
 		return `A person declined ${what}${who}${resume.decline_reason ? `: ${resume.decline_reason}` : ""}. It did not happen. Continue without it and give your final answer.`;
 	}
 	return `Nobody decided on ${what} in time, so it did not happen. Continue without it and give your final answer.`;
+}
+
+/** The Grill session id, acting member id, instruction, and frozen ADR snapshot for a planning Run. */
+export function claimPlanningTurn(
+	claim: RunnerClaim,
+): { instruction: string; grillSessionId: string; actingUserId: string; adrSnapshot: AdrSnapshot | null } | null {
+	const payload = claim.trigger_payload as { grill_session_id?: unknown; run_now_by?: unknown };
+	const grillSessionId = typeof payload.grill_session_id === "string" ? payload.grill_session_id : "";
+	// The member who asked for this turn (M5): the warm session below is
+	// keyed on this too, so one member's turn never continues with another
+	// member's earlier turns (and whatever private context they surfaced)
+	// still in the session.
+	const actingUserId = typeof payload.run_now_by === "string" ? payload.run_now_by : "";
+	const instruction = claim.input ?? "";
+	if (!grillSessionId || !actingUserId || !instruction) return null;
+	const adrSnapshot = claim.definition_snapshot.adr_snapshot ?? null;
+	return { instruction, grillSessionId, actingUserId, adrSnapshot };
 }
 
 /** The chat turn Takonaut sent with a chat Run. */
@@ -2915,9 +2944,11 @@ export async function runPiAnalysis(
 ): Promise<RunnerAnalysis> {
 	signal?.throwIfAborted();
 	const chat = claim.mode === "chat";
-	// Machine-registered connectors aren't offered in chat; organization tools
-	// are, when marked "Available in chat".
-	const connectors = chat ? { sessions: [], notes: [] } : await openGrantedConnectors(claim);
+	const planning = claim.mode === "planning";
+	// Machine-registered connectors aren't offered in chat or planning;
+	// organization tools are, when marked "Available in chat" (planning uses
+	// only the Planner's exactly granted catalog tools, below).
+	const connectors = chat || planning ? { sessions: [], notes: [] } : await openGrantedConnectors(claim);
 	const pausing = pausesForApproval(claim);
 	let pauseFor: string | null = null;
 	let abortForPause: (() => void) | null = null;
@@ -2977,12 +3008,13 @@ export async function runPiAnalysis(
 				})
 			: [];
 	// Takonaut tools run in Takonaut, so no signing key is needed; it is only
-	// for Trusted Native GitHub calls made from this machine.
-	const trustedTools = api
-		? await makeTrustedRunnerTools(cwd, claim, api, signingKey, { canEdit: workspaceTools.length > 0 })
-		: [];
+	// for Trusted Native GitHub calls made from this machine. Planning Runs
+	// never get the native GitHub broker: only the Planner's exactly granted
+	// catalog tools (ADR-0010 B6).
+	const trustedTools =
+		api && !planning ? await makeTrustedRunnerTools(cwd, claim, api, signingKey, { canEdit: workspaceTools.length > 0 }) : [];
 	const recorder = new RunRecorder({ ...(claim.tool_limits ?? {}), ...catalog.limits });
-	const canRemember = api?.proposeNote && !["test", "eval", "chat"].includes(claim.mode ?? "live");
+	const canRemember = api?.proposeNote && !(["test", "eval", "chat", "planning"] as string[]).includes(claim.mode ?? "live");
 	const tools = [
 		...makeRunnerTools(cwd, claim),
 		...workspaceTools,
@@ -3004,6 +3036,7 @@ export async function runPiAnalysis(
 		Promise.allSettled(connectors.sessions.map((item) => item.close()));
 	let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
 	const chatTurn = chat ? claimChat(claim) : null;
+	const planningTurn = planning ? claimPlanningTurn(claim) : null;
 	let warm = false;
 	let sessionManager = SessionManager.inMemory(cwd);
 	if (pausing || claim.resume) {
@@ -3044,6 +3077,18 @@ export async function runPiAnalysis(
 				: SessionManager.create(cwd, dir);
 		} catch (error) {
 			console.error(`Chat session not kept: ${errorMessage(error)}`);
+		}
+	}
+	if (planningTurn) {
+		try {
+			prunePlanningSessions();
+			const { dir, warmFile } = warmPlanningSession(planningTurn.grillSessionId, planningTurn.actingUserId);
+			warm = warmFile !== null;
+			sessionManager = warmFile
+				? SessionManager.forkFrom(warmFile, cwd, dir)
+				: SessionManager.create(cwd, dir);
+		} catch (error) {
+			console.error(`Planning session not kept: ${errorMessage(error)}`);
 		}
 	}
 	try {
@@ -3128,9 +3173,11 @@ export async function runPiAnalysis(
 				? resumePrompt(claim.resume)
 				: chatTurn
 					? chatPrompt(chatTurn.question, chatTurn.from, chatTurn.history, warm, chatTurn.subject)
-					: continued && followUp
-						? continuedPrompt(followUp.message) + repositoriesSection(claim)
-						: runnerPrompt(claim),
+					: planningTurn
+						? planningPrompt(planningTurn.instruction, planningTurn.adrSnapshot, warm)
+						: continued && followUp
+							? continuedPrompt(followUp.message) + repositoriesSection(claim)
+							: runnerPrompt(claim),
 		);
 		await stream?.done();
 		signal?.throwIfAborted();
@@ -3166,7 +3213,7 @@ export async function runPiAnalysis(
 		// Output fields: ask for them as JSON after the answer; one retry.
 		const fields = outputFields(claim.definition_snapshot.agent_profile_snapshot);
 		let structuredOutput: Record<string, unknown> | undefined;
-		if (fields.length > 0 && !chatTurn) {
+		if (fields.length > 0 && !chatTurn && !planningTurn) {
 			let problems: string[] = [];
 			for (let attempt = 0; attempt < 2; attempt += 1) {
 				signal?.throwIfAborted();

@@ -628,6 +628,21 @@ The compatible Pi runtime suite is intentionally pinned. Upgrade all
 `@earendil-works/pi-*` packages together and verify a production-only packed
 installation before releasing.
 
+## Planning turns
+
+The Runner also runs Planner turns from Planning Studio (Runs with mode
+`planning`). A planning turn is read-only: it uses a detached worktree at the
+Grill session's pinned commit, gets only the tools the Planner profile grants,
+never writes to the repository, pushes or opens pull requests, and its result
+is completed back to Takonaut as a Draft, never published. Untrusted text
+(the instruction, ADRs in force, session context) is fenced in the prompt as
+data.
+
+The Pi session for a Grill session is kept warm between turns, separately for
+each member asking, in `~/.takonaut/planning/` (owner-only;
+`TAKONAUT_RUNNER_PLANNING_SESSIONS`), for 30 minutes after the last turn
+(`TAKONAUT_RUNNER_PLANNING_WARM_MS`).
+
 ## Homebrew release formula
 
 After publishing a GitHub tag and calculating the release package tarball SHA-256:

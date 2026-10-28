@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner changing several repositories per Run as v0.8.0", () => {
-		expect(pkg.version).toBe("0.8.0");
+	it("publishes the Runner running read-only planning turns as v0.9.0", () => {
+		expect(pkg.version).toBe("0.9.0");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

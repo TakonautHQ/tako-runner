@@ -16,11 +16,14 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	RunnerApiClient,
+	changeableRepositories,
 	changedSafeRunnerPaths,
+	claimPlanningTurn,
 	clearRunnerStopMarker,
 	cleanupRunnerCheckout,
 	loadRunnerDaemonConfig,
 	makeRunnerTools,
+	pausesForApproval,
 	prepareRunnerCheckout,
 	processRunnerClaim,
 	resolveRunnerRepositoryRoot,
@@ -805,6 +808,82 @@ describe("Runner immutable revision", () => {
 	});
 });
 
+describe("Planning Runs", () => {
+	const planningClaim = (overrides: Partial<RunnerClaim> = {}) =>
+		claim({
+			mode: "planning",
+			trigger_payload: {
+				mode: "planning",
+				run_now_by: "user-1",
+				grill_session_id: "0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a",
+			},
+			input: "Draft the plan for the refund flow.",
+			revision_spec: { schema_version: 0, type: "repository.commit" },
+			...overrides,
+		});
+
+	it("reads the Grill session id, instruction, and frozen ADR snapshot from the claim", () => {
+		const adrSnapshot = {
+			digest: "sha256:abc",
+			adrs: [
+				{
+					adr_id: "adr-1",
+					number: 7,
+					title: "Use Postgres",
+					org_wide: false,
+					revision_id: "rev-1",
+					content: "We use Postgres.",
+					truncated: false,
+				},
+			],
+		};
+		const withSnapshot = planningClaim({
+			definition_snapshot: { ...planningClaim().definition_snapshot, adr_snapshot: adrSnapshot },
+		});
+		const turn = claimPlanningTurn(withSnapshot);
+		expect(turn?.grillSessionId).toBe("0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a");
+		expect(turn?.actingUserId).toBe("user-1");
+		expect(turn?.instruction).toBe("Draft the plan for the refund flow.");
+		expect(turn?.adrSnapshot).toEqual(adrSnapshot);
+	});
+
+	it("refuses to read a planning turn without a Grill session id, acting member id, or instruction", () => {
+		expect(claimPlanningTurn(planningClaim({ trigger_payload: {} }))).toBeNull();
+		expect(claimPlanningTurn(planningClaim({ input: "" }))).toBeNull();
+		expect(
+			claimPlanningTurn(
+				planningClaim({
+					trigger_payload: {
+						mode: "planning",
+						grill_session_id: "0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a",
+					},
+				}),
+			),
+		).toBeNull();
+	});
+
+	it("never treats a planning Run's worktree as changeable, even without an explicit may_change: false", () => {
+		expect(changeableRepositories(process.cwd(), planningClaim())).toEqual([]);
+		// A live Run with the same revision_spec shape would be changeable by default.
+		expect(changeableRepositories(process.cwd(), claim({ revision_spec: { schema_version: 0, type: "repository.commit" } }))).not.toEqual(
+			[],
+		);
+	});
+
+	it("never pauses a planning Run for approval, even when the Profile asks for it", () => {
+		const governed = planningClaim({
+			definition_snapshot: {
+				...planningClaim().definition_snapshot,
+				agent_profile_snapshot: {
+					...planningClaim().definition_snapshot.agent_profile_snapshot,
+					governance: { pause_for_approval: true },
+				} as RunnerClaim["definition_snapshot"]["agent_profile_snapshot"],
+			},
+		});
+		expect(pausesForApproval(governed)).toBe(false);
+	});
+});
+
 describe("Runner repository boundary", () => {
 	const roots: string[] = [];
 	afterEach(() => {
@@ -1029,6 +1108,40 @@ describe("Runner claim processing", () => {
 		);
 		expect(api.fail).not.toHaveBeenCalled();
 		expect(cleanup).toHaveBeenCalledOnce();
+	});
+
+	it("routes a planning Run through the same completion call, for the server's planning-only completion path", async () => {
+		const api = {
+			event: vi.fn(async () => undefined),
+			heartbeat: vi.fn(async () => undefined),
+			usage: vi.fn(async () => undefined),
+			complete: vi.fn(async () => undefined),
+			fail: vi.fn(async () => undefined),
+		};
+		const cleanup = vi.fn(async () => undefined);
+		await processRunnerClaim(
+			claim({
+				mode: "planning",
+				trigger_payload: {
+					mode: "planning",
+					run_now_by: "user-1",
+					grill_session_id: "0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a",
+				},
+			}),
+			{
+				api,
+				prepare: vi.fn(async () => ({ cwd: "/tmp/worktree", cleanup })),
+				analyze: vi.fn(async () => ({
+					outputMarkdown: "Here's the draft plan.",
+					provider: "anthropic",
+					model: "claude-sonnet",
+					inputTokens: 50,
+					outputTokens: 30,
+				})),
+			},
+		);
+		expect(api.complete).toHaveBeenCalledWith("run-1", "run-token", "Here's the draft plan.");
+		expect(api.fail).not.toHaveBeenCalled();
 	});
 
 	it("fences analysis when a heartbeat is rejected and never publishes a result", async () => {
