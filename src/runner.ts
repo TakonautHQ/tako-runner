@@ -66,6 +66,7 @@ import {
 	requireHostedModel,
 	warmPlanningSession,
 } from "./planning";
+import { claimMockupJob, mockupPrompt } from "./mockup";
 import { checkFields, fieldsPrompt, outputFields } from "./output-fields";
 import { chooseModel, modelKey, openRunnerModels, usableModels } from "./models";
 import {
@@ -203,8 +204,9 @@ export interface RunnerClaim {
 	/** Organization tools this Run's Agent is granted (Takonaut 0.4+). */
 	tools?: CatalogToolSpec[];
 	/** live posts results; test posts nothing; chat answers a conversation;
-	 * planning answers one Grill turn, read-only. */
-	mode?: "live" | "test" | "chat" | "workflow" | "eval" | "planning";
+	 * planning answers one Grill turn, read-only; mockup drafts or regenerates
+	 * a Mockup, read-only (Takonaut applies the result). */
+	mode?: "live" | "test" | "chat" | "workflow" | "eval" | "planning" | "mockup";
 	conversation_id?: string | null;
 	/** Continuing a Run that paused for an approved change. */
 	resume?: RunnerResume | null;
@@ -2476,9 +2478,9 @@ export function changeableRepositories(
 	cwd: string,
 	claim: RunnerClaim,
 ): { label: string; path: string; repositoryId: string; sha: string }[] {
-	// Planning Runs are read-only (ADR-0010 B6), independent of revision_spec:
-	// never give the Planner a sandbox, a diff to commit, or a PR tool.
-	if (claim.mode === "planning") return [];
+	// Planning and Mockup Runs are read-only (ADR-0010 B6), independent of
+	// revision_spec: never a sandbox, a diff to commit, or a PR tool.
+	if (claim.mode === "planning" || claim.mode === "mockup") return [];
 	const out: { label: string; path: string; repositoryId: string; sha: string }[] = [];
 	if (claim.revision_spec?.may_change !== false && claim.reviewed_head_sha) {
 		out.push({
@@ -2743,7 +2745,7 @@ ${connectorNotes.map((note) => `- ${note}`).join("\n")}`
 export function pausesForApproval(claim: RunnerClaim): boolean {
 	const governance = (claim.definition_snapshot.agent_profile_snapshot as { governance?: { pause_for_approval?: unknown } })
 		.governance;
-	return governance?.pause_for_approval === true && !["test", "eval", "chat", "planning"].includes(claim.mode ?? "live");
+	return governance?.pause_for_approval === true && !["test", "eval", "chat", "planning", "mockup"].includes(claim.mode ?? "live");
 }
 
 function pinnedProvider(claim: RunnerClaim): string | null {
@@ -2997,7 +2999,8 @@ export async function runPiAnalysis(
 ): Promise<RunnerAnalysis> {
 	signal?.throwIfAborted();
 	const chat = claim.mode === "chat";
-	const planning = claim.mode === "planning";
+	// A Mockup Run is read-only like planning: only exactly granted tools.
+	const planning = claim.mode === "planning" || claim.mode === "mockup";
 	// Machine-registered connectors aren't offered in chat or planning;
 	// organization tools are, when marked "Available in chat" (planning uses
 	// only the Planner's exactly granted catalog tools, below).
@@ -3067,7 +3070,7 @@ export async function runPiAnalysis(
 	const trustedTools =
 		api && !planning ? await makeTrustedRunnerTools(cwd, claim, api, signingKey, { canEdit: workspaceTools.length > 0 }) : [];
 	const recorder = new RunRecorder({ ...(claim.tool_limits ?? {}), ...catalog.limits });
-	const canRemember = api?.proposeNote && !(["test", "eval", "chat", "planning"] as string[]).includes(claim.mode ?? "live");
+	const canRemember = api?.proposeNote && !(["test", "eval", "chat", "planning", "mockup"] as string[]).includes(claim.mode ?? "live");
 	const tools = [
 		...makeRunnerTools(cwd, claim),
 		...workspaceTools,
@@ -3089,7 +3092,9 @@ export async function runPiAnalysis(
 		Promise.allSettled(connectors.sessions.map((item) => item.close()));
 	let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
 	const chatTurn = chat ? claimChat(claim) : null;
-	const planningTurn = planning ? claimPlanningTurn(claim) : null;
+	const planningTurn = claim.mode === "planning" ? claimPlanningTurn(claim) : null;
+	const mockupJob = claim.mode === "mockup" ? claimMockupJob(claim.trigger_payload) : null;
+	if (claim.mode === "mockup" && !mockupJob) throw new Error("This Mockup request is missing its details");
 	let warm = false;
 	let sessionManager = SessionManager.inMemory(cwd);
 	if (pausing || claim.resume) {
@@ -3245,7 +3250,9 @@ export async function runPiAnalysis(
 				? resumePrompt(claim.resume)
 				: chatTurn
 					? chatPrompt(chatTurn.question, chatTurn.from, chatTurn.history, warm, chatTurn.subject)
-					: planningTurn
+					: mockupJob
+						? mockupPrompt(mockupJob)
+						: planningTurn
 						? planningPrompt(
 								planningTurn.instruction,
 								planningTurn.adrSnapshot,
@@ -3296,7 +3303,7 @@ export async function runPiAnalysis(
 		// Output fields: ask for them as JSON after the answer; one retry.
 		const fields = outputFields(claim.definition_snapshot.agent_profile_snapshot);
 		let structuredOutput: Record<string, unknown> | undefined;
-		if (fields.length > 0 && !chatTurn && !planningTurn) {
+		if (fields.length > 0 && !chatTurn && !planningTurn && !mockupJob) {
 			let problems: string[] = [];
 			for (let attempt = 0; attempt < 2; attempt += 1) {
 				signal?.throwIfAborted();

@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner hosting a Grill's one Planner session as v0.10.0", () => {
-		expect(pkg.version).toBe("0.10.0");
+	it("publishes the Runner drafting and regenerating Mockups as v0.11.0", () => {
+		expect(pkg.version).toBe("0.11.0");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

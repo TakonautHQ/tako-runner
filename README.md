@@ -654,6 +654,19 @@ the Grill so far in the system prompt, together with the Project's Grill
 prompt. A side branch keeps its own session under `branches/<branch>/`,
 forked from the main session on its first turn; its Runs get no write tools.
 
+### Drafting and regenerating Mockups (v0.11.0)
+
+A person in Takonaut can ask a Project's Agent to draft a new Mockup, or to
+regenerate one from the team's pin and area comments. The Run (`mode:
+"mockup"`) is read-only like a planning turn: the code is checked out at a
+pinned commit so the agent can match the product's UI, it gets only the
+Agent's exactly granted organization tools, and it changes nothing. The
+current source, the comments with where they point, the request and the work
+item's published text come with the claim; the agent answers with the
+complete new source in one `takonaut-mockup` block, and Takonaut checks it,
+publishes it and marks the comments addressed. It runs on any Runner of the
+Project and repository that may run that Agent (its Runs on setting).
+
 ## Homebrew release formula
 
 After publishing a GitHub tag and calculating the release package tarball SHA-256:
