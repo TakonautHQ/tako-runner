@@ -643,6 +643,17 @@ each member asking, in `~/.takonaut/planning/` (owner-only;
 `TAKONAUT_RUNNER_PLANNING_SESSIONS`), for 30 minutes after the last turn
 (`TAKONAUT_RUNNER_PLANNING_WARM_MS`).
 
+### Hosting a Grill (v0.10.0)
+
+When a team chooses this Runner to host a Grill (Grill v2), every member's turn
+continues the Grill's one shared session, in
+`~/.takonaut/planning/<grill>/shared-g<generation>/`, warm for a day, on the
+model the team chose (the Run fails rather than fall back to another model). A
+new generation (host or model changed, or Rebuild session) starts fresh with
+the Grill so far in the system prompt, together with the Project's Grill
+prompt. A side branch keeps its own session under `branches/<branch>/`,
+forked from the main session on its first turn; its Runs get no write tools.
+
 ## Homebrew release formula
 
 After publishing a GitHub tag and calculating the release package tarball SHA-256:

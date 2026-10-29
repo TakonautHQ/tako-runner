@@ -847,6 +847,49 @@ describe("Planning Runs", () => {
 		expect(turn?.adrSnapshot).toEqual(adrSnapshot);
 	});
 
+	it("reads a hosted Grill's generation, model and asker (Grill v2)", () => {
+		const hosted = claimPlanningTurn(
+			planningClaim({
+				trigger_payload: {
+					mode: "planning",
+					run_now_by: "user-1",
+					grill_session_id: "0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a",
+					hosted: true,
+					planner_model: "anthropic/claude-opus-5-5",
+					session_generation: 3,
+					asker_name: "Ravi",
+					rebuild_context: "## Decisions so far\n- Who can refund? → Ops only",
+					grill_prompt: "Interview the team in rounds.",
+				},
+			}),
+		);
+		expect(hosted?.hosted).toBe(true);
+		expect(hosted?.rebuildContext).toContain("Ops only");
+		expect(hosted?.grillPrompt).toBe("Interview the team in rounds.");
+		expect(hosted?.sessionGeneration).toBe(3);
+		expect(hosted?.plannerModel).toBe("anthropic/claude-opus-5-5");
+		expect(hosted?.askerName).toBe("Ravi");
+
+		const branch = claimPlanningTurn(
+			planningClaim({
+				trigger_payload: {
+					mode: "planning",
+					run_now_by: "user-1",
+					grill_session_id: "0b6f8c2e-1d7a-4c55-9a1f-1f2e3d4c5b6a",
+					hosted: true,
+					planner_model: "anthropic/claude-opus-5-5",
+					branch: { id: "99999999-9999-9999-9999-999999999999", title: "Stripe fees", fork: true },
+				},
+			}),
+		);
+		expect(branch?.branch).toEqual({ id: "99999999-9999-9999-9999-999999999999", title: "Stripe fees", fork: true });
+		expect(hosted?.branch).toBeUndefined();
+
+		const plain = claimPlanningTurn(planningClaim());
+		expect(plain?.hosted).toBe(false);
+		expect(plain?.plannerModel).toBeUndefined();
+	});
+
 	it("refuses to read a planning turn without a Grill session id, acting member id, or instruction", () => {
 		expect(claimPlanningTurn(planningClaim({ trigger_payload: {} }))).toBeNull();
 		expect(claimPlanningTurn(planningClaim({ input: "" }))).toBeNull();

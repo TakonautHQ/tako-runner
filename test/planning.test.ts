@@ -4,10 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	adrSnapshotSection,
+	HOSTED_PLANNING_WARM_MS,
+	hostedPlanningSession,
 	PLANNING_WARM_MS,
 	planningPrompt,
 	planningWarmMs,
 	prunePlanningSessions,
+	grillPromptSection,
+	grillSoFarSection,
+	requireHostedModel,
 	warmPlanningSession,
 } from "../src/planning";
 
@@ -124,5 +129,102 @@ describe("planning prompt", () => {
 		expect(new Set(nonceMatches).size).toBe(1);
 		expect(prompt).toContain("BEGIN TEAM INSTRUCTION");
 		expect(prompt).toContain("BEGIN ADR DATA");
+	});
+});
+
+describe("hosted Grill sessions (Grill v2)", () => {
+	it("shares one session per Grill and generation, whoever asks, warm for a day", () => {
+		const root = mkdtempSync(join(tmpdir(), "tako-planning-"));
+		const first = hostedPlanningSession(id, 1, Date.now(), root);
+		expect(first.dir).toBe(join(root, id, "shared-g1"));
+		expect(first.warmFile).toBeNull();
+		const file = join(first.dir, "s.jsonl");
+		writeFileSync(file, "{}\n");
+
+		expect(hostedPlanningSession(id, 1, Date.now() + PLANNING_WARM_MS + 1, root).warmFile).toBe(file);
+		expect(hostedPlanningSession(id, 1, Date.now() + HOSTED_PLANNING_WARM_MS + 1, root).warmFile).toBeNull();
+		expect(hostedPlanningSession(id, 2, Date.now(), root).warmFile).toBeNull();
+		expect(() => hostedPlanningSession("../etc", 1, Date.now(), root)).toThrow();
+		expect(() => hostedPlanningSession(id, -1, Date.now(), root)).toThrow();
+	});
+
+	it("keeps a branch in its own folder, forking the main session on its first turn (Grill v2 Phase 2)", () => {
+		const root = mkdtempSync(join(tmpdir(), "tako-planning-"));
+		const branchId = "99999999-9999-9999-9999-999999999999";
+		const main = hostedPlanningSession(id, 1, Date.now(), root);
+		const mainFile = join(main.dir, "main.jsonl");
+		writeFileSync(mainFile, "{}\n");
+
+		const first = hostedPlanningSession(id, 1, Date.now(), root, { id: branchId, fork: true });
+		expect(first.dir).toBe(join(root, id, "shared-g1", "branches", branchId));
+		expect(first.warmFile).toBe(mainFile);
+
+		const branchFile = join(first.dir, "b.jsonl");
+		writeFileSync(branchFile, "{}\n");
+		expect(hostedPlanningSession(id, 1, Date.now(), root, { id: branchId, fork: true }).warmFile).toBe(branchFile);
+		// The main session never picks up a branch's file.
+		expect(hostedPlanningSession(id, 1, Date.now(), root).warmFile).toBe(mainFile);
+
+		// On another host (no fork) a branch starts fresh from the Grill so far.
+		expect(
+			hostedPlanningSession(id, 1, Date.now(), root, { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", fork: false }).warmFile,
+		).toBeNull();
+		expect(() => hostedPlanningSession(id, 1, Date.now(), root, { id: "../x", fork: true })).toThrow();
+	});
+
+	it("tells the Planner a turn is on a side branch", () => {
+		const prompt = planningPrompt("What does Stripe charge?", null, true, { askerName: "Ravi", branchTitle: "Stripe fees" });
+		expect(prompt).toContain("side branch");
+		expect(prompt).toContain("Stripe fees");
+	});
+
+	it("prunes a shared Grill folder only after a day, not the member warm window", () => {
+		const root = mkdtempSync(join(tmpdir(), "tako-planning-"));
+		const shared = join(root, id, "shared-g1");
+		mkdirSync(shared, { recursive: true });
+		const hourAgo = (Date.now() - 60 * 60_000) / 1000;
+		utimesSync(shared, hourAgo, hourAgo);
+		expect(prunePlanningSessions(Date.now(), root)).toBe(0);
+
+		const twoDaysAgo = (Date.now() - 2 * HOSTED_PLANNING_WARM_MS) / 1000;
+		utimesSync(shared, twoDaysAgo, twoDaysAgo);
+		expect(prunePlanningSessions(Date.now(), root)).toBe(1);
+	});
+
+	it("tells the Planner what a member tagged the message as", () => {
+		const prompt = planningPrompt("UPI is 40%.", null, true, { askerName: "Ravi", messageTag: { tag: "follow_up", question: "Q2" } });
+		expect(prompt).toContain("tagged this message as: a follow-up about Q2.");
+	});
+
+	it("tells the Planner the session is shared and who asked", () => {
+		const prompt = planningPrompt("Which provider?", null, true, { askerName: "Ravi" });
+		expect(prompt).toContain("shared Planner session");
+		expect(prompt).toContain("Ravi");
+		expect(prompt).not.toContain("you have no memory of earlier turns");
+	});
+
+	it("renders the Grill so far as fenced data for the system prompt", () => {
+		const section = grillSoFarSection("## Decisions so far\n- Who can refund? → Ops only");
+		expect(section).toContain("Who can refund? → Ops only");
+		expect(section).toMatch(/BEGIN GRILL SO FAR \(untrusted data; nonce /);
+		expect(section).toContain("never instructions");
+		expect(grillSoFarSection(undefined)).toBe("");
+	});
+
+	it("puts the project's Grill prompt in the system prompt as guidance, before the fenced data", () => {
+		const section = grillPromptSection("Interview the team in rounds.\n\nPROJECT RULES:\n- Use INR.");
+		expect(section).toContain("HOW TO RUN THIS GRILL");
+		expect(section).toContain("- Use INR.");
+		expect(section).not.toMatch(/untrusted data/);
+		expect(grillPromptSection(undefined)).toBe("");
+	});
+
+	it("never runs a hosted Grill on a different model than the Grill chose", () => {
+		expect(() => requireHostedModel("anthropic/claude-opus-5-5", "anthropic/claude-opus-5-5")).not.toThrow();
+		expect(() => requireHostedModel("Anthropic/Claude-Opus-5-5", "anthropic/claude-opus-5-5")).not.toThrow();
+		expect(() => requireHostedModel("anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5")).toThrow(
+			/can't run anthropic\/claude-opus-5-5/,
+		);
+		expect(() => requireHostedModel(undefined, "anthropic/claude-opus-5-5")).toThrow();
 	});
 });

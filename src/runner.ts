@@ -58,12 +58,16 @@ import { RunRecorder, type RunMetrics, writeRunArchive } from "./run-archive";
 import { type ChatTurn, chatPrompt, pruneChats, throttle, warmSession } from "./chat";
 import {
 	type AdrSnapshot,
+	grillPromptSection,
+	grillSoFarSection,
+	hostedPlanningSession,
 	planningPrompt,
 	prunePlanningSessions,
+	requireHostedModel,
 	warmPlanningSession,
 } from "./planning";
 import { checkFields, fieldsPrompt, outputFields } from "./output-fields";
-import { chooseModel, openRunnerModels, usableModels } from "./models";
+import { chooseModel, modelKey, openRunnerModels, usableModels } from "./models";
 import {
 	claimFollowUp,
 	continuedPrompt,
@@ -2803,10 +2807,34 @@ export function resumePrompt(resume: RunnerResume): string {
 }
 
 /** The Grill session id, acting member id, instruction, and frozen ADR snapshot for a planning Run. */
-export function claimPlanningTurn(
-	claim: RunnerClaim,
-): { instruction: string; grillSessionId: string; actingUserId: string; adrSnapshot: AdrSnapshot | null } | null {
-	const payload = claim.trigger_payload as { grill_session_id?: unknown; run_now_by?: unknown };
+export function claimPlanningTurn(claim: RunnerClaim): {
+	instruction: string;
+	grillSessionId: string;
+	actingUserId: string;
+	adrSnapshot: AdrSnapshot | null;
+	/** Grill v2: this Runner hosts the Grill's one shared session. */
+	hosted: boolean;
+	sessionGeneration: number;
+	plannerModel?: string;
+	askerName?: string;
+	rebuildContext?: string;
+	grillPrompt?: string;
+	messageTag?: { tag: string; question?: string | null };
+	/** Grill v2 Phase 2: a read-only side branch (fork = continue a fork of the main session). */
+	branch?: { id: string; title: string; fork: boolean };
+} | null {
+	const payload = claim.trigger_payload as {
+		grill_session_id?: unknown;
+		run_now_by?: unknown;
+		hosted?: unknown;
+		session_generation?: unknown;
+		planner_model?: unknown;
+		asker_name?: unknown;
+		rebuild_context?: unknown;
+		grill_prompt?: unknown;
+		message_tag?: unknown;
+		branch?: unknown;
+	};
 	const grillSessionId = typeof payload.grill_session_id === "string" ? payload.grill_session_id : "";
 	// The member who asked for this turn (M5): the warm session below is
 	// keyed on this too, so one member's turn never continues with another
@@ -2816,7 +2844,32 @@ export function claimPlanningTurn(
 	const instruction = claim.input ?? "";
 	if (!grillSessionId || !actingUserId || !instruction) return null;
 	const adrSnapshot = claim.definition_snapshot.adr_snapshot ?? null;
-	return { instruction, grillSessionId, actingUserId, adrSnapshot };
+	const hosted = payload.hosted === true;
+	return {
+		instruction,
+		grillSessionId,
+		actingUserId,
+		adrSnapshot,
+		hosted,
+		sessionGeneration: typeof payload.session_generation === "number" ? payload.session_generation : 0,
+		plannerModel: hosted && typeof payload.planner_model === "string" ? payload.planner_model : undefined,
+		askerName: hosted && typeof payload.asker_name === "string" ? payload.asker_name : undefined,
+		rebuildContext: hosted && typeof payload.rebuild_context === "string" ? payload.rebuild_context : undefined,
+		grillPrompt: hosted && typeof payload.grill_prompt === "string" ? payload.grill_prompt : undefined,
+		messageTag:
+			hosted && payload.message_tag && typeof (payload.message_tag as { tag?: unknown }).tag === "string"
+				? (payload.message_tag as { tag: string; question?: string | null })
+				: undefined,
+		branch: hosted ? claimBranch(payload.branch) : undefined,
+	};
+}
+
+/** Grill v2 Phase 2: the read-only side branch a hosted turn belongs to. */
+function claimBranch(value: unknown): { id: string; title: string; fork: boolean } | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const branch = value as { id?: unknown; title?: unknown; fork?: unknown };
+	if (typeof branch.id !== "string" || typeof branch.title !== "string") return undefined;
+	return { id: branch.id, title: branch.title, fork: branch.fork === true };
 }
 
 /** The chat turn Takonaut sent with a chat Run. */
@@ -3082,7 +3135,15 @@ export async function runPiAnalysis(
 	if (planningTurn) {
 		try {
 			prunePlanningSessions();
-			const { dir, warmFile } = warmPlanningSession(planningTurn.grillSessionId, planningTurn.actingUserId);
+			const { dir, warmFile } = planningTurn.hosted
+				? hostedPlanningSession(
+						planningTurn.grillSessionId,
+						planningTurn.sessionGeneration,
+						undefined,
+						undefined,
+						planningTurn.branch,
+					)
+				: warmPlanningSession(planningTurn.grillSessionId, planningTurn.actingUserId);
 			warm = warmFile !== null;
 			sessionManager = warmFile
 				? SessionManager.forkFrom(warmFile, cwd, dir)
@@ -3093,10 +3154,19 @@ export async function runPiAnalysis(
 	}
 	try {
 		const preference = modelPreference(claim.definition_snapshot.agent_profile_snapshot);
+		if (planningTurn?.plannerModel) {
+			// A hosted Grill (Grill v2) runs on the model the team chose for it.
+			const index = planningTurn.plannerModel.indexOf("/");
+			preference.provider = planningTurn.plannerModel.slice(0, index);
+			preference.modelId = planningTurn.plannerModel.slice(index + 1);
+		}
 		// Pi's providers plus this Runner's endpoints; the Runner default when
 		// the Agent doesn't choose a model (or this machine doesn't have it).
 		const runnerModels = await openRunnerModels();
 		const { model, note } = await chooseModel(runnerModels, preference);
+		if (planningTurn?.plannerModel) {
+			requireHostedModel(model ? modelKey(model) : undefined, planningTurn.plannerModel);
+		}
 		if (note) console.error(note);
 		({ session } = await createAgentSession({
 			modelRuntime: runnerModels.modelRuntime,
@@ -3109,7 +3179,9 @@ export async function runPiAnalysis(
 					trustedTools.length > 0,
 					connectors.notes,
 					workspaceTools.length > 0,
-				),
+				) +
+					grillPromptSection(planningTurn?.grillPrompt) +
+					grillSoFarSection(planningTurn?.rebuildContext),
 			),
 			noTools: "builtin",
 			tools: tools.map((tool) => tool.name),
@@ -3174,7 +3246,18 @@ export async function runPiAnalysis(
 				: chatTurn
 					? chatPrompt(chatTurn.question, chatTurn.from, chatTurn.history, warm, chatTurn.subject)
 					: planningTurn
-						? planningPrompt(planningTurn.instruction, planningTurn.adrSnapshot, warm)
+						? planningPrompt(
+								planningTurn.instruction,
+								planningTurn.adrSnapshot,
+								warm,
+								planningTurn.hosted
+									? {
+											askerName: planningTurn.askerName,
+											messageTag: planningTurn.messageTag,
+											branchTitle: planningTurn.branch?.title,
+										}
+									: undefined,
+							)
 						: continued && followUp
 							? continuedPrompt(followUp.message) + repositoriesSection(claim)
 							: runnerPrompt(claim),
