@@ -13,14 +13,17 @@
  *   (secrets resolved); output is capped and redacted.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { redact } from "../redact";
 import {
 	bwrapArgs,
 	createRunTemp,
 	detectSandbox,
 	macosProfile,
+	runnerPath,
 	type SandboxKind,
 } from "../sandbox";
 import { type SecretStore, resolveSecrets } from "../secrets";
@@ -28,6 +31,10 @@ import type { ToolCallOutcome } from "./api-tool";
 
 export interface ScriptToolSpec {
 	command: string[];
+	/** The script stored with the tool in Takonaut; `${script}` in the command is its path. */
+	script?: { filename: string; content: string; sha256: string };
+	/** Programs it runs besides its own, checked before it counts as ready. */
+	requires_programs?: string[];
 	cwd: "repository" | "home" | string;
 	env?: Record<string, string>;
 	network: false | { allowed_hosts: string[] };
@@ -37,9 +44,47 @@ export interface ScriptToolSpec {
 }
 
 const WHOLE = /^\{([a-zA-Z_][a-zA-Z0-9_]{0,63})\}$/;
+export const SCRIPT_TOKEN = "${script}";
+const FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
-export function scriptArgv(spec: ScriptToolSpec, args: Record<string, unknown>): string[] {
+export function defaultScriptsDir(): string {
+	return process.env.TAKONAUT_RUNNER_TOOL_SCRIPTS ?? join(homedir(), ".takonaut", "tool-scripts");
+}
+
+/** Throws when the stored script is malformed or doesn't match its checksum. */
+export function verifyScript(spec: ScriptToolSpec): void {
+	const script = spec.script;
+	if (!script) return;
+	if (!FILENAME.test(script.filename) || !/^[0-9a-f]{64}$/.test(script.sha256)) {
+		throw new Error("The tool's script file is invalid");
+	}
+	if (createHash("sha256").update(script.content).digest("hex") !== script.sha256) {
+		throw new Error("The tool's script doesn't match its checksum; sync tools again");
+	}
+}
+
+/**
+ * The stored script's path on this machine, written once per checksum.
+ * Throws when the content doesn't match the checksum Takonaut sent.
+ */
+export function scriptFile(spec: ScriptToolSpec, dir = defaultScriptsDir()): string | null {
+	const script = spec.script;
+	if (!script) return null;
+	verifyScript(spec);
+	const folder = join(dir, script.sha256);
+	const path = join(folder, script.filename);
+	if (!existsSync(path)) {
+		mkdirSync(folder, { recursive: true, mode: 0o700 });
+		const temporary = `${path}.${process.pid}.tmp`;
+		writeFileSync(temporary, script.content, { mode: 0o500 });
+		renameSync(temporary, path);
+	}
+	return path;
+}
+
+export function scriptArgv(spec: ScriptToolSpec, args: Record<string, unknown>, script?: string): string[] {
 	return spec.command.map((part, index) => {
+		if (part === SCRIPT_TOKEN && script) return script;
 		const match = WHOLE.exec(part);
 		if (!match || index === 0) return part;
 		const value = args[match[1] as string];
@@ -86,7 +131,7 @@ export async function executeScriptTool(
 					: spec.cwd;
 		if (!existsSync(cwd)) return { ok: false, summary: `Working folder ${cwd} does not exist`, output: "" };
 		const env: Record<string, string> = {
-			PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",
+			PATH: runnerPath(),
 			HOME: homedir(),
 			LANG: process.env.LANG ?? "en_US.UTF-8",
 			TMPDIR: temp.path,
@@ -95,7 +140,7 @@ export async function executeScriptTool(
 		for (const [name, value] of Object.entries(spec.env ?? {})) {
 			env[name] = resolveSecrets(value, options.secrets, used);
 		}
-		const argv = scriptArgv(spec, args);
+		const argv = scriptArgv(spec, args, scriptFile(spec) ?? undefined);
 		const command = `cd ${shellQuote(cwd)} && exec ${argv.map(shellQuote).join(" ")}`;
 		const paths = { worktree: temp.path, writable: [], tmp: temp.path, home: homedir() };
 		const network = spec.network !== false;

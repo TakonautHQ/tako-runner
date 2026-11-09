@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bwrapArgs, detectSandbox, macosProfile, runSandboxed, type SandboxPaths } from "../src/sandbox";
+import { bwrapArgs, detectSandbox, findProgram, macosProfile, runnerPath, runSandboxed, type SandboxPaths } from "../src/sandbox";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -97,3 +97,26 @@ describe.skipIf(detectSandbox() !== "macos")("sandboxed commands on macOS", () =
 });
 
 void execFileSync;
+
+describe("Runner PATH", () => {
+	it("adds the usual install folders that exist, after the service's own, once each", () => {
+		const exists = (dir: string) => ["/opt/homebrew/bin", "/home/me/.local/bin", "/usr/bin", "/bin"].includes(dir);
+		expect(runnerPath({ PATH: "/usr/bin:/bin" }, "/home/me", exists)).toBe("/usr/bin:/bin:/opt/homebrew/bin:/home/me/.local/bin");
+		expect(runnerPath({}, "/home/me", exists)).toBe("/opt/homebrew/bin:/home/me/.local/bin:/usr/bin:/bin");
+	});
+
+	it("finds a program on that PATH, or by its absolute path", () => {
+		const dir = mkdtempSync(join(tmpdir(), "path-"));
+		try {
+			const program = join(dir, "aws");
+			writeFileSync(program, "#!/bin/sh\n", { mode: 0o755 });
+			writeFileSync(join(dir, "notes"), "x", { mode: 0o644 });
+			expect(findProgram("aws", dir)).toBe(program);
+			expect(findProgram(program, "")).toBe(program);
+			expect(findProgram("notes", dir)).toBeNull();
+			expect(findProgram("missing", dir)).toBeNull();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

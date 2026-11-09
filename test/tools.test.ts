@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import {
 	syncTools,
 	toolState,
 } from "../src/tools/catalog";
-import { scriptArgv } from "../src/tools/script-tool";
+import { scriptArgv, scriptFile } from "../src/tools/script-tool";
 
 const store = (values: Record<string, string>) => ({
 	get: (name: string) => values[name],
@@ -160,6 +161,48 @@ describe("script tools", () => {
 			"a b; rm -rf /",
 			"--flag",
 		]);
+	});
+});
+
+describe("stored script files", () => {
+	const content = "print('hi')\n";
+	const sha256 = createHash("sha256").update(content).digest("hex");
+
+	it("writes the file once by its checksum and puts its path where ${script} is", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tako-scripts-"));
+		const spec = {
+			command: ["python3", "${script}", "{service}"],
+			cwd: "home" as const,
+			network: false as const,
+			script: { filename: "check.py", content, sha256 },
+		};
+		const path = scriptFile(spec, dir);
+		expect(path).toBe(join(dir, sha256, "check.py"));
+		expect(readFileSync(path as string, "utf8")).toBe(content);
+		expect(scriptArgv(spec, { service: "api" }, path as string)).toEqual(["python3", path, "api"]);
+		expect(() => scriptFile({ ...spec, script: { ...spec.script, content: "changed" } }, dir)).toThrow(/checksum/);
+	});
+
+	it("a tool is not ready when a program it runs is missing here", () => {
+		const script = tool({
+			kind: "script",
+			spec: { command: ["python3", "${script}"], requires_programs: ["aws"], script: { filename: "a.py", content, sha256 } },
+		});
+		const find = (name: string) => (name === "python3" ? "/usr/bin/python3" : null);
+		expect(toolState(script, store({}), find)).toMatchObject({
+			state: "error",
+			error: "Needs aws, which isn't on this Runner. Install it, or add its folder to the Runner's PATH.",
+		});
+		expect(toolState(script, store({}), () => "/x").state).toBe("ready");
+		// A secret that looks like one inside the script's own code is not a setting it needs.
+		const shell = tool({
+			kind: "script",
+			spec: {
+				command: ["sh", "${script}"],
+				script: { filename: "a.sh", content: "echo ${secret:NOPE}", sha256: createHash("sha256").update("echo ${secret:NOPE}").digest("hex") },
+			},
+		});
+		expect(toolState(shell, store({}), () => "/bin/sh").state).toBe("ready");
 	});
 });
 

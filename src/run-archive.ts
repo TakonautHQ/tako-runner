@@ -49,10 +49,13 @@ export interface RunMetrics {
 	commandsRun: number;
 	changesMade: number;
 	durationSeconds: number;
+	/** Every tool the model was offered, in order. */
+	toolsOffered?: string[];
 }
 
 export class RunRecorder {
 	readonly events: ToolEvent[] = [];
+	private readonly offered = new Set<string>();
 	private readonly started = Date.now();
 	private readonly calls = new Map<string, number[]>();
 
@@ -92,6 +95,7 @@ export class RunRecorder {
 	wrap<T extends { name: string; execute: (...args: never[]) => unknown }>(tool: T): T {
 		const original = tool.execute as (...args: unknown[]) => Promise<unknown>;
 		const recorder = this;
+		this.offered.add(tool.name);
 		const execute = async function (this: unknown, ...args: unknown[]) {
 			recorder.admit(tool.name);
 			const began = Date.now();
@@ -113,6 +117,7 @@ export class RunRecorder {
 			commandsRun: this.events.filter((event) => event.tool === "runner_shell").length,
 			changesMade: (patch.match(/^diff --git /gm) ?? []).length,
 			durationSeconds: Math.round((Date.now() - this.started) / 1000),
+			toolsOffered: [...this.offered],
 		};
 	}
 }

@@ -26,6 +26,14 @@ describe("Run recorder", () => {
 		expect(metrics).toMatchObject({ toolCalls: 3, commandsRun: 2, changesMade: 2 });
 		expect(recorder.events.map((e) => e.ok)).toEqual([true, true, false]);
 	});
+
+	it("lists every tool the model was offered, called or not", () => {
+		const recorder = new RunRecorder();
+		recorder.wrap({ name: "runner_read", execute: async () => "" });
+		recorder.wrap({ name: "t_ops_aws", execute: async () => "" });
+		recorder.wrap({ name: "runner_read", execute: async () => "" });
+		expect(recorder.metrics("").toolsOffered).toEqual(["runner_read", "t_ops_aws"]);
+	});
 });
 
 describe("Run archive", () => {

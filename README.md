@@ -667,6 +667,23 @@ complete new source in one `takonaut-mockup` block, and Takonaut checks it,
 publishes it and marks the comments addressed. It runs on any Runner of the
 Project and repository that may run that Agent (its Runs on setting).
 
+### Tools and sealed secrets (v0.12.0)
+
+Runs, script tools and connectors find programs where installers put them
+(Homebrew, `/usr/local/bin`, `~/.local/bin`), not only the service's bare
+`PATH`. A tool is ready only when its program and every program it lists are
+installed; otherwise its state names what's missing (`tako-runner doctor`
+shows it too). A script stored in Takonaut is written once, by checksum, under
+`~/.takonaut/tool-scripts/`, and its path replaces `${script}` in the command.
+
+Secrets can be entered on a tool's page in Takonaut. The Runner keeps a P-256
+key in `~/.takonaut/runner-sealing-key.json` (owner-only, unreadable from Runs)
+and advertises its public half; the browser seals each value to it, bound to
+the key's fingerprint and the secret's name. The Runner opens it, stores it
+like `tako-runner secrets set` and tells Takonaut, which then deletes the
+sealed copy. Compare `tako-runner secrets fingerprint` with the fingerprint
+shown in the browser the first time.
+
 ## Homebrew release formula
 
 After publishing a GitHub tag and calculating the release package tarball SHA-256:

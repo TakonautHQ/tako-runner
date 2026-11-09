@@ -151,7 +151,13 @@ export function referencedSecrets(value: unknown): string[] {
 		if (typeof item === "string") {
 			for (const match of item.matchAll(SECRET_REF)) found.add(match[1] as string);
 		} else if (Array.isArray(item)) item.forEach(walk);
-		else if (item && typeof item === "object") Object.values(item).forEach(walk);
+		else if (item && typeof item === "object") {
+			for (const [key, child] of Object.entries(item)) {
+				// A stored script file is code, not settings: secrets reach it through env.
+				if (key === "script" && child && typeof child === "object" && !Array.isArray(child)) continue;
+				walk(child);
+			}
+		}
 	};
 	walk(value);
 	return [...found].sort();

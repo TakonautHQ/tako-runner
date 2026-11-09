@@ -55,6 +55,7 @@ import { startLeaseWatchdog } from "./lease-watchdog";
 import { isSensitiveSegment } from "./runner-paths";
 import { RUNNER_VERSION } from "./version";
 import { RunRecorder, type RunMetrics, writeRunArchive } from "./run-archive";
+import { loadTicketImages } from "./ticket-images";
 import { type ChatTurn, chatPrompt, pruneChats, throttle, warmSession } from "./chat";
 import {
 	type AdrSnapshot,
@@ -108,6 +109,7 @@ import {
 	syncTools,
 	type ToolState,
 } from "./tools/catalog";
+import { deliverSealedSecrets, safeSealingPublicKey, type SealedEnvelope } from "./sealed-secrets";
 import { createRunTemp, defaultSandboxHome, detectSandbox } from "./sandbox";
 import {
 	claimAutonomy,
@@ -522,6 +524,8 @@ export interface RunnerApi {
 		structuredOutput?: Record<string, unknown>,
 	): Promise<unknown>;
 	fail(runId: string, runToken: string, error: string): Promise<unknown>;
+	/** One ticket image the Run's snapshot marks readable. */
+	attachment?(runId: string, runToken: string, attachmentId: string): Promise<Uint8Array>;
 	trustedTools?(
 		runId: string,
 		runToken: string,
@@ -958,6 +962,8 @@ export function summarizeErrorBody(status: number, body: string): string {
 
 export class RunnerApiClient implements RunnerApi, ControlApi {
 	private readonly requestTimeoutMs: number;
+	/** False once a Takonaut too old for sealed secrets refused the key. */
+	private sendSealingKey = true;
 
 	constructor(
 		private readonly config: RunnerDaemonConfig,
@@ -988,6 +994,8 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 			/** Aborting stops the request (its reason is the rejection). */
 			signal?: AbortSignal;
 			timeoutMs?: number;
+			/** Return the body as bytes instead of parsing JSON. */
+			bytes?: boolean;
 		} = {},
 	): Promise<T | null> {
 		const baseUrl = this.config.serverUrl.replace(/\/+$/, "");
@@ -1039,6 +1047,7 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 				);
 				throw new Error(`Takonaut Runner API ${response.status}: ${detail}`);
 			}
+			if (options.bytes) return new Uint8Array(await response.arrayBuffer()) as T;
 			return (await response.json()) as T;
 		};
 		try {
@@ -1078,14 +1087,15 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 						? trustedCapabilities
 						: ["git.detached_worktree"],
 			}));
-		return this.request(
+		const sealing = this.sendSealingKey ? safeSealingPublicKey() : undefined;
+		const send = (sealingKey: string | undefined) => this.request(
 			"/api/runner/capabilities",
 			this.config.credential,
 			{
 				protocol_version: this.config.signingKey ? 3 : 1,
 				runner_version: RUNNER_VERSION,
 				platform: `${process.platform}-${process.arch}`,
-				repository_ids: Object.keys(this.config.repositoryBindings).sort(),
+				repository_ids: Object.keys(this.config.repositoryBindings ?? {}).sort(),
 				capabilities: [
 					"git.detached_worktree",
 					// Checks out every repository the Agent reads, at exact commits.
@@ -1101,6 +1111,8 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 					...extra,
 				],
 				repository_capabilities: repositoryCapabilities,
+				// Secrets typed in the browser are sealed to this key; only this machine opens them.
+				...(sealingKey ? { sealing_public_key: sealingKey } : {}),
 				signing_key: this.config.signingKey
 					? {
 							key_id: this.config.signingKey.keyId,
@@ -1111,6 +1123,14 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 			},
 			"PUT",
 		);
+		try {
+			return await send(sealing);
+		} catch (error) {
+			// A Takonaut older than sealed secrets refuses the unknown field; advertise without it.
+			if (!sealing || !/422/.test(String(error)) || !/sealing_public_key/.test(String(error))) throw error;
+			this.sendSealingKey = false;
+			return send(undefined);
+		}
 	}
 
 	async listTools(): Promise<CatalogToolSpec[]> {
@@ -1125,6 +1145,20 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 
 	reportToolStates(states: ToolState[]): Promise<unknown> {
 		return this.request("/api/runner/tools/state", this.config.credential, { states }, "PUT");
+	}
+
+	async listSealedSecrets(): Promise<{ id: string; name: string; envelope: SealedEnvelope }[]> {
+		const result = await this.request<{ secrets?: { id: string; name: string; envelope: SealedEnvelope }[] }>(
+			"/api/runner/sealed-secrets",
+			this.config.credential,
+			undefined,
+			"GET",
+		);
+		return result?.secrets ?? [];
+	}
+
+	ackSealedSecrets(ack: { delivered: string[]; failed: { id: string; error: string }[] }): Promise<unknown> {
+		return this.request("/api/runner/sealed-secrets/ack", this.config.credential, ack);
 	}
 
 	progress(
@@ -1483,6 +1517,18 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 			runToken,
 			{ event_key: eventKey, event_type: eventType, metadata },
 		);
+	}
+
+	async attachment(runId: string, runToken: string, attachmentId: string): Promise<Uint8Array> {
+		const data = await this.request<Uint8Array>(
+			`/api/runner/runs/${encodeURIComponent(runId)}/attachments/${encodeURIComponent(attachmentId)}`,
+			runToken,
+			undefined,
+			"GET",
+			undefined,
+			{ bytes: true },
+		);
+		return data ?? new Uint8Array();
 	}
 
 	heartbeat(
@@ -2990,6 +3036,25 @@ function emptyResourceLoader(systemPrompt: string): ResourceLoader {
 	};
 }
 
+/**
+ * The tools a Run offers the model: built-in ones, this machine's connectors,
+ * then the organization tools granted to the Agent. Catalog connectors'
+ * tools are already in `catalog.tools`, so their sessions add nothing.
+ */
+export function runToolList<T>(parts: {
+	base: T[];
+	machineConnectors: Array<{ tools: T[] }>;
+	catalog: { tools: T[] };
+	extra: T[];
+}): T[] {
+	return [
+		...parts.base,
+		...parts.machineConnectors.flatMap((session) => session.tools),
+		...parts.catalog.tools,
+		...parts.extra,
+	];
+}
+
 export async function runPiAnalysis(
 	claim: RunnerClaim,
 	cwd: string,
@@ -3029,6 +3094,7 @@ export async function runPiAnalysis(
 		signal,
 		chatOnly: claim.mode === "chat",
 	});
+	const machineConnectors = [...connectors.sessions];
 	connectors.sessions.push(...catalog.sessions);
 	connectors.notes.push(...catalog.notes);
 	const autonomy = claimAutonomy(claim.definition_snapshot.agent_profile_snapshot);
@@ -3071,19 +3137,18 @@ export async function runPiAnalysis(
 		api && !planning ? await makeTrustedRunnerTools(cwd, claim, api, signingKey, { canEdit: workspaceTools.length > 0 }) : [];
 	const recorder = new RunRecorder({ ...(claim.tool_limits ?? {}), ...catalog.limits });
 	const canRemember = api?.proposeNote && !(["test", "eval", "chat", "planning", "mockup"] as string[]).includes(claim.mode ?? "live");
-	const tools = [
-		...makeRunnerTools(cwd, claim),
-		...workspaceTools,
-		...trustedTools,
-		...connectors.sessions.flatMap((session) => session.tools),
-		...(canRemember
+	const tools = runToolList({
+		base: [...makeRunnerTools(cwd, claim), ...workspaceTools, ...trustedTools],
+		machineConnectors,
+		catalog,
+		extra: canRemember
 			? [
 					rememberTool((text) =>
 						(api?.proposeNote as NonNullable<RunnerApi["proposeNote"]>)(claim.run_id, claim.run_token, text),
 					),
 				]
-			: []),
-	].map((tool) => recorder.wrap(tool));
+			: [],
+	}).map((tool) => recorder.wrap(tool));
 	const settingsManager = SettingsManager.inMemory({
 		compaction: { enabled: true },
 		retry: { enabled: true, maxRetries: 2 },
@@ -3245,6 +3310,13 @@ export async function runPiAnalysis(
 		: null;
 	try {
 		signal?.throwIfAborted();
+		// A plain Run on a ticket shows the model the ticket's readable images.
+		const plainRun = !claim.resume && !chatTurn && !mockupJob && !planningTurn && !(continued && followUp);
+		const attachment = api?.attachment?.bind(api);
+		const ticketImages =
+			plainRun && attachment
+				? await loadTicketImages(claim.trigger_payload, (id) => attachment(claim.run_id, claim.run_token, id))
+				: { images: [], section: "" };
 		await session.prompt(
 			claim.resume
 				? resumePrompt(claim.resume)
@@ -3267,7 +3339,8 @@ export async function runPiAnalysis(
 							)
 						: continued && followUp
 							? continuedPrompt(followUp.message) + repositoriesSection(claim)
-							: runnerPrompt(claim),
+							: runnerPrompt(claim) + ticketImages.section,
+			ticketImages.images.length ? { images: ticketImages.images } : undefined,
 		);
 		await stream?.done();
 		signal?.throwIfAborted();
@@ -3460,6 +3533,10 @@ export async function processRunnerClaim(
 						commands_run: analysis.metrics.commandsRun,
 						changes_made: analysis.metrics.changesMade,
 						duration_seconds: analysis.metrics.durationSeconds,
+						// Takonaut accepts at most 200 plain tool names.
+						tools_offered: analysis.metrics.toolsOffered
+							?.filter((name) => /^[A-Za-z0-9_-]{1,64}$/.test(name))
+							.slice(0, 200),
 					}
 				: {}),
 		});
@@ -3955,6 +4032,13 @@ export async function runRunnerDaemon(
 			try {
 				if (Date.now() - lastSync >= syncEvery) {
 					lastSync = Date.now();
+					try {
+						const stored = await deliverSealedSecrets(api);
+						if (stored.length) log(`Stored secret(s) entered in Takonaut: ${stored.join(", ")}`);
+					} catch (error) {
+						// An older Takonaut has no sealed secrets; tools still sync.
+						log(`Sealed secrets not checked: ${errorMessage(error)}`);
+					}
 					const ready = (await syncTools(api)).join(",");
 					if (ready !== advertisedTools) {
 						advertisedTools = ready;

@@ -11,7 +11,7 @@
  * the shell tool is not offered.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,6 +38,7 @@ export const SECRET_PATHS = [
 	".takonaut/runner-credentials.json",
 	".takonaut/runner-connectors.json",
 	".takonaut/secrets.json",
+	".takonaut/runner-sealing-key.json",
 	".takonaut/tools.json",
 	".takonaut/models.json",
 	".takonaut/chats",
@@ -129,9 +130,55 @@ export function bwrapArgs(paths: SandboxPaths, command: string): string[] {
 	return args;
 }
 
+// Where installers put programs. A Runner started as a service gets a bare PATH
+// (/usr/bin:/bin), which hid Homebrew's aws, uv and python3 from Runs and tools.
+const INSTALL_DIRS = [
+	"/opt/homebrew/bin",
+	"/opt/homebrew/sbin",
+	"/usr/local/bin",
+	"/usr/local/sbin",
+	"~/.local/bin",
+	"~/.cargo/bin",
+	"~/go/bin",
+	"/usr/bin",
+	"/bin",
+	"/usr/sbin",
+	"/sbin",
+];
+
+/** The service's PATH, then each usual install folder that exists here, once each. */
+export function runnerPath(
+	env: Record<string, string | undefined> = process.env,
+	home = homedir(),
+	exists: (dir: string) => boolean = existsSync,
+): string {
+	const own = (env.PATH ?? "").split(":").filter(Boolean);
+	const extra = INSTALL_DIRS.map((dir) => (dir.startsWith("~/") ? join(home, dir.slice(2)) : dir)).filter(exists);
+	return [...new Set([...own, ...extra])].join(":");
+}
+
+/** The program's full path: as given when absolute, else the first match on PATH. */
+export function findProgram(name: string, path = runnerPath()): string | null {
+	const runnable = (file: string) => {
+		try {
+			if (!statSync(file).isFile()) return false;
+			accessSync(file, constants.X_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	if (name.includes("/")) return runnable(name) ? name : null;
+	for (const dir of path.split(":").filter(Boolean)) {
+		const file = join(dir, name);
+		if (runnable(file)) return file;
+	}
+	return null;
+}
+
 export function sandboxEnvironment(paths: SandboxPaths): Record<string, string> {
 	return {
-		PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",
+		PATH: runnerPath(),
 		HOME: paths.home,
 		LANG: process.env.LANG ?? "en_US.UTF-8",
 		TMPDIR: paths.tmp,

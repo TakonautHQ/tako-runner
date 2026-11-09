@@ -138,7 +138,8 @@ export async function registerEndpoints(modelRuntime: ModelRuntime, endpoints: r
 					id,
 					name: id,
 					reasoning: false,
-					input: ["text"],
+					// Every endpoint model is treated as able to read images.
+					input: ["text", "image"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 128_000,
 					maxTokens: 32_000,

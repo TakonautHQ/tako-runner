@@ -53,7 +53,7 @@ describe("Runner browser enrollment", () => {
 				status: 200,
 				json: {
 					credential: "tkr_machine-secret",
-					organization_name: "Cureocity",
+					organization_name: "Acme",
 					runner: {
 						id: "runner-1",
 						organization_id: "org-1",
@@ -80,7 +80,7 @@ describe("Runner browser enrollment", () => {
 			serverUrl: "https://takonaut.test",
 			credential: "tkr_machine-secret",
 			organizationId: "org-1",
-			organizationName: "Cureocity",
+			organizationName: "Acme",
 			runnerId: "runner-1",
 			projects: ["project-1"],
 		});

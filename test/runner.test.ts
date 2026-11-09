@@ -29,6 +29,7 @@ import {
 	resolveRunnerRepositoryRoot,
 	resolveSafeRunnerPath,
 	runRunnerDaemon,
+	runToolList,
 	runnerDiffRange,
 	runnerFetchRefspecs,
 	runnerSystemPrompt,
@@ -1583,5 +1584,21 @@ describe("Runner concurrency", () => {
 		}
 		expect(peak).toBe(3);
 		expect(started).toBe(6);
+	});
+});
+
+describe("runToolList", () => {
+	const tool = (name: string) => ({ name });
+
+	it("offers organization script and API tools to the model, once each", () => {
+		// A catalog connector's tools come back in catalog.tools.
+		const names = runToolList({
+			base: [tool("runner_read")],
+			machineConnectors: [{ tools: [tool("aws_logs__tail")] }],
+			catalog: { tools: [tool("t_sentry__search"), tool("t_ops_aws")] },
+			extra: [tool("remember")],
+		}).map((item) => item.name);
+
+		expect(names).toEqual(["runner_read", "aws_logs__tail", "t_sentry__search", "t_ops_aws", "remember"]);
 	});
 });

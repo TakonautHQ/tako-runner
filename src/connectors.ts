@@ -24,6 +24,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { runnerPath } from "./sandbox";
 import { RUNNER_VERSION } from "./version";
 
 export interface RunnerConnector {
@@ -270,6 +271,7 @@ export async function openConnectorTools(
 		const value = process.env[key];
 		if (value !== undefined) env[key] = value;
 	}
+	env.PATH = runnerPath();
 	Object.assign(env, connector.env);
 	const [command, ...args] = connector.command;
 	const child = spawn(command as string, args, { env, stdio: ["pipe", "pipe", "pipe"] });

@@ -17,7 +17,9 @@ import { type ConnectorSession, openConnectorTools, type RunnerConnector } from 
 import { redact } from "../redact";
 import { type SecretStore, missingSecrets, resolveSecrets, secretStore } from "../secrets";
 import { type ApiToolSpec, executeApiTool, type ToolCallOutcome } from "./api-tool";
-import { executeScriptTool, type ScriptToolSpec } from "./script-tool";
+import { findProgram } from "../sandbox";
+import { safeSealingPublicKey, sealingFingerprint } from "../sealed-secrets";
+import { executeScriptTool, type ScriptToolSpec, scriptFile, verifyScript } from "./script-tool";
 
 export interface CatalogToolSpec {
 	key: string;
@@ -72,11 +74,39 @@ function writeLocalTools(tools: CatalogToolSpec[], path: string): void {
 	renameSync(temporary, path);
 }
 
-export function toolState(tool: CatalogToolSpec, secrets: SecretStore): ToolState {
+/** The programs a script or connector tool starts, which this machine must have. */
+export function toolPrograms(tool: CatalogToolSpec): string[] {
+	if (tool.kind !== "script" && tool.kind !== "connector") return [];
+	const command = Array.isArray(tool.spec.command) ? (tool.spec.command as unknown[]) : [];
+	const first = typeof command[0] === "string" && !command[0].includes("${") ? [command[0]] : [];
+	const extra = Array.isArray(tool.spec.requires_programs)
+		? (tool.spec.requires_programs as unknown[]).filter((name): name is string => typeof name === "string")
+		: [];
+	return [...new Set([...first, ...extra])];
+}
+
+export function toolState(
+	tool: CatalogToolSpec,
+	secrets: SecretStore,
+	find: (program: string) => string | null = findProgram,
+): ToolState {
 	const base = { definition_id: tool.definition_id, revision_id: tool.revision_id };
 	if (!KEY.test(tool.key)) return { ...base, state: "error", error: "Invalid tool name" };
+	const absent = toolPrograms(tool).filter((program) => find(program) === null);
 	const missing = missingSecrets(tool.spec, secrets);
-	if (missing.length > 0) return { ...base, state: "missing_secrets", missing_secrets: missing };
+	const error = absent.length
+		? `Needs ${absent.join(", ")}, which ${absent.length === 1 ? "isn't" : "aren't"} on this Runner. Install ${absent.length === 1 ? "it" : "them"}, or add ${absent.length === 1 ? "its folder" : "their folders"} to the Runner's PATH.`
+		: undefined;
+	// Missing secrets keep their own state so the page can show the commands to set them.
+	if (missing.length > 0) return { ...base, state: "missing_secrets", missing_secrets: missing, ...(error ? { error } : {}) };
+	if (error) return { ...base, state: "error", error };
+	if (tool.kind === "script") {
+		try {
+			verifyScript(tool.spec as unknown as ScriptToolSpec);
+		} catch (caught) {
+			return { ...base, state: "error", error: caught instanceof Error ? caught.message : String(caught) };
+		}
+	}
 	return { ...base, state: "ready" };
 }
 
@@ -104,6 +134,15 @@ export function safeSecretStore(): SecretStore {
 export async function syncTools(api: CatalogApi, path = defaultToolsPath()): Promise<string[]> {
 	const tools = (await api.listTools()).filter((tool) => KEY.test(tool.key));
 	writeLocalTools(tools, path);
+	for (const tool of tools) {
+		if (tool.kind !== "script") continue;
+		try {
+			// Ready before the first Run needs it; a bad file shows in the tool's state.
+			scriptFile(tool.spec as unknown as ScriptToolSpec);
+		} catch {
+			// toolState reports it.
+		}
+	}
 	const secrets = safeSecretStore();
 	await api.reportToolStates(tools.map((tool) => toolState(tool, secrets)));
 	return catalogCapabilities(tools, secrets);
@@ -389,9 +428,19 @@ export async function doctorToolChecks(
 ): Promise<Array<{ name: string; level: "ok" | "warn" | "fail"; detail: string; fix?: string }>> {
 	const secrets = safeSecretStore();
 	const checks: Array<{ name: string; level: "ok" | "warn" | "fail"; detail: string; fix?: string }> = [];
+	const sealing = safeSealingPublicKey();
+	checks.push(
+		sealing
+			? { name: "Secrets from Takonaut", level: "ok", detail: `sealed to fingerprint ${sealingFingerprint(sealing)}` }
+			: { name: "Secrets from Takonaut", level: "warn", detail: "No sealing key", fix: "tako-runner secrets fingerprint" },
+	);
 	for (const tool of tools) {
 		const name = `Tool ${tool.label}`;
 		const state = toolState(tool, secrets);
+		if (state.state === "error") {
+			checks.push({ name, level: "fail", detail: state.error ?? "Not ready", fix: "tako-runner tools" });
+			continue;
+		}
 		if (state.state === "missing_secrets") {
 			checks.push({
 				name,

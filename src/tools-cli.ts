@@ -10,11 +10,13 @@ import {
 	unsetSecret,
 	validateSecretName,
 } from "./secrets";
+import { loadOrCreateSealingKey, sealingFingerprint } from "./sealed-secrets";
 import { callCatalogTool, loadLocalTools, safeSecretStore, toolState } from "./tools/catalog";
 
 export const SECRETS_USAGE = `  tako-runner secrets                  list secrets this Runner has and the ones its tools still need
   tako-runner secrets set NAME [--keychain]   prompt for a value (not echoed); --keychain stores it in the macOS Keychain
   tako-runner secrets unset NAME
+  tako-runner secrets fingerprint       the key fingerprint to check when entering secrets in Takonaut
   tako-runner secrets import --env-file FILE  store every NAME=value line
   tako-runner tools                    organization tools on this Runner and whether each is ready
   tako-runner tools test KEY [--tool MCP_TOOL] [--arg NAME=VALUE]...`;
@@ -67,6 +69,12 @@ export async function secretsCommand(args: string[]): Promise<void> {
 		const value = await promptHidden(`Value for ${name}: `);
 		setSecret(name, value, { keychain: rest.includes("--keychain") });
 		console.log(`Saved ${name}. Tools that need it become ready within 5 minutes, or now with: tako-runner tools`);
+		return;
+	}
+	if (action === "fingerprint") {
+		const key = loadOrCreateSealingKey();
+		console.log(`This Runner's sealing key fingerprint:\n  ${sealingFingerprint(key.publicKeyB64)}`);
+		console.log("When you enter a secret for this Runner in Takonaut, check it shows the same fingerprint.");
 		return;
 	}
 	if (action === "unset" && rest[0]) {
