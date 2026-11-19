@@ -225,7 +225,13 @@ login refuses `gpt-5.5`). `tako-runner doctor` warns when there is none.
 Endpoints are configuration only (`~/.takonaut/models.json`); their models
 come from the endpoint's `/models` list and no third-party code runs.
 `models test --all` treats timeouts and rate limits as "not sure" and keeps
-those models. Restart the service after changes.
+those models.
+
+The Runner checks its models every 5 minutes and reports them again when they
+change: models added to or removed from an endpoint, a new default, or models
+`models test` stopped. If a provider or endpoint fails during a check, the
+Runner keeps the models it last reported. To report a change at once, restart
+the service (`brew services restart tako-runner`).
 
 ## Several repositories in one Run
 

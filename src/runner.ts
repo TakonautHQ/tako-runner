@@ -1059,11 +1059,16 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 		}
 	}
 
-	async advertiseCapabilities(): Promise<unknown> {
+	/** Model capabilities in the last advertisement Takonaut accepted. */
+	advertisedModels: string[] | undefined;
+
+	/** Advertise; `models` skips model discovery when the caller already has the list. */
+	async advertiseCapabilities(models?: readonly string[]): Promise<unknown> {
 		if (this.config.repositoryBindings === undefined) {
 			return null;
 		}
-		const extra = [...(await localModelCapabilities()), ...sandboxCapabilities(), "protocol.v4"];
+		const modelList = models ? [...models] : await localModelCapabilities();
+		const extra = [...modelList, ...sandboxCapabilities(), "protocol.v4"];
 		const trustedCapabilities = [
 			"git.detached_worktree",
 			"github.native.v1",
@@ -1123,14 +1128,17 @@ export class RunnerApiClient implements RunnerApi, ControlApi {
 			},
 			"PUT",
 		);
+		let result: unknown;
 		try {
-			return await send(sealing);
+			result = await send(sealing);
 		} catch (error) {
 			// A Takonaut older than sealed secrets refuses the unknown field; advertise without it.
 			if (!sealing || !/422/.test(String(error)) || !/sealing_public_key/.test(String(error))) throw error;
 			this.sendSealingKey = false;
-			return send(undefined);
+			result = await send(undefined);
 		}
+		this.advertisedModels = [...modelList].sort();
+		return result;
 	}
 
 	async listTools(): Promise<CatalogToolSpec[]> {
@@ -2677,8 +2685,12 @@ export function modelCapabilities(models: readonly { provider: string; id: strin
 		.slice(0, 100);
 }
 
-async function localModelCapabilities(): Promise<string[]> {
-	if (process.env.TAKONAUT_RUNNER_ADVERTISE_MODELS === "0") return [];
+/**
+ * This machine's model capabilities. `complete` is false when a provider or
+ * endpoint failed, so the list may be missing models that still work.
+ */
+export async function discoverModelCapabilities(): Promise<{ capabilities: string[]; complete: boolean }> {
+	if (process.env.TAKONAUT_RUNNER_ADVERTISE_MODELS === "0") return { capabilities: [], complete: true };
 	try {
 		const models = await openRunnerModels();
 		const usable = await usableModels(models);
@@ -2688,11 +2700,39 @@ async function localModelCapabilities(): Promise<string[]> {
 			fallback && usable.some((model) => `${model.provider}/${model.id}`.toLowerCase() === fallback)
 				? [`model.default:${fallback}`]
 				: [];
-		return [...defaultCapability, ...modelCapabilities(usable)].filter((item) => /^model\.[a-z0-9._\-/:*]{1,122}$/.test(item));
+		const capabilities = [...defaultCapability, ...modelCapabilities(usable)].filter((item) =>
+			/^model\.[a-z0-9._\-/:*]{1,122}$/.test(item),
+		);
+		return { capabilities, complete: models.errors.length === 0 };
 	} catch (error) {
 		console.error(`Runner models not advertised: ${errorMessage(error)}`);
-		return [];
+		return { capabilities: [], complete: false };
 	}
+}
+
+async function localModelCapabilities(): Promise<string[]> {
+	return (await discoverModelCapabilities()).capabilities;
+}
+
+/**
+ * Advertise again when this machine's models changed since the last
+ * advertisement (say, models added to or removed from LiteLLM). An incomplete
+ * discovery changes nothing, so a short endpoint outage never hides models.
+ * Returns true when it advertised.
+ */
+export async function refreshModelCapabilities(
+	api: Pick<RunnerApiClient, "advertiseCapabilities" | "advertisedModels">,
+	discover: () => Promise<{ capabilities: string[]; complete: boolean }> = discoverModelCapabilities,
+	log: (message: string) => void = console.error,
+): Promise<boolean> {
+	if (api.advertisedModels === undefined) return false; // Not advertised yet; the first advertisement sends models.
+	const found = await discover();
+	if (!found.complete) return false;
+	const next = [...found.capabilities].sort();
+	if (next.join(",") === api.advertisedModels.join(",")) return false;
+	await api.advertiseCapabilities(next);
+	log(`Runner models changed; advertised ${next.filter((item) => !item.startsWith("model.default:")).length} model capability(ies)`);
+	return true;
 }
 
 function sandboxCapabilities(): string[] {
@@ -3947,6 +3987,8 @@ export async function runRunnerDaemon(
 		 */
 		control?: boolean;
 		toolSyncIntervalMs?: number;
+		/** Model discovery for the control loop's model check; for tests. */
+		discoverModels?: () => Promise<{ capabilities: string[]; complete: boolean }>;
 	} = {},
 ): Promise<void> {
 	const stopMarkerPath =
@@ -4032,6 +4074,12 @@ export async function runRunnerDaemon(
 			try {
 				if (Date.now() - lastSync >= syncEvery) {
 					lastSync = Date.now();
+					try {
+						// Takonaut shows only the models this Runner last advertised.
+						await refreshModelCapabilities(api, options.discoverModels, log);
+					} catch (error) {
+						log(`Runner models not refreshed: ${errorMessage(error)}`);
+					}
 					try {
 						const stored = await deliverSealedSecrets(api);
 						if (stored.length) log(`Stored secret(s) entered in Takonaut: ${stored.join(", ")}`);
