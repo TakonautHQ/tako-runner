@@ -260,6 +260,13 @@ Sessions are kept in `~/.takonaut/threads/<thread>/<run>/` (owner-only) for
 24 hours after the last turn (`TAKONAUT_RUNNER_THREAD_HOURS`, `0` keeps none).
 They hold the Agent's tool results, so code it read.
 
+## Writing standard
+
+Takonaut sends its writing standard with each Run. The Runner adds it to the
+Agent's instructions, after the Profile's own text. If the Profile already
+contains the standard, the Runner does not add it again. Takonaut versions
+that do not send the standard leave the instructions unchanged.
+
 ## Organization tools and secrets
 
 Organization administrators add tools on the **Agents → Tools** tab in

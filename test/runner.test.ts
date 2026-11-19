@@ -33,8 +33,13 @@ import {
 	runnerDiffRange,
 	runnerFetchRefspecs,
 	runnerSystemPrompt,
+	writingStandardSection,
 	saveRunnerDaemonConfig,
 	RunnerSupervisionError,
+	RunnerApiError,
+	errorBackoffMs,
+	AUTH_ERROR_MAX_WAIT_MS,
+	ERROR_MAX_WAIT_MS,
 	type RunnerAnalysis,
 	type RunnerClaim,
 	RUNNER_VERSION,
@@ -595,6 +600,44 @@ describe("Runner daemon polling", () => {
 		repositories: {},
 	};
 
+	it("backs off after errors, longest after a refused credential", () => {
+		const refused = new RunnerApiError(401, "Takonaut Runner API 401: Invalid Runner credential");
+		expect(errorBackoffMs(2_000, 1, refused)).toBe(2_000);
+		expect(errorBackoffMs(2_000, 2, refused)).toBe(4_000);
+		expect(errorBackoffMs(2_000, 50, refused)).toBe(AUTH_ERROR_MAX_WAIT_MS);
+		expect(errorBackoffMs(2_000, 50, new Error("network"))).toBe(ERROR_MAX_WAIT_MS);
+		expect(errorBackoffMs(2_000, 50, new RunnerApiError(500, "x"))).toBe(ERROR_MAX_WAIT_MS);
+	});
+
+	it("does not poll every interval while Takonaut refuses its credential", async () => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
+		const logs: string[] = [];
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ detail: "Invalid Runner credential" }), {
+					status: 401,
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			const daemon = runRunnerDaemon(
+				{ ...daemonConfig, pollIntervalMs: 2_000 },
+				{ signal: controller.signal, stopMarkerPath: markerPath(), log: (line) => logs.push(line) },
+			);
+			// Waits 2, 4, 8, 16, 32 s: 5 retries plus the first try in 62 s,
+			// where a fixed 2 s interval would make 31.
+			await vi.advanceTimersByTimeAsync(62_000);
+			controller.abort();
+			await daemon;
+			expect(fetchMock.mock.calls.length).toBe(6);
+			expect(logs[0]).toContain("refused this Runner's credential");
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
+	});
+
 	it("passes its shutdown signal to the active claim", async () => {
 		const controller = new AbortController();
 		let received: AbortSignal | undefined;
@@ -745,6 +788,22 @@ describe("Runner Profile identity", () => {
 		expect(prompt).toContain("Agent Profile 'Review Profile'");
 		expect(prompt).toContain("Review only.");
 		expect(prompt).not.toContain("agent_slug");
+	});
+
+	it("adds Takonaut's writing standard once, after the Profile's instructions", () => {
+		const standard = "Writing (Takonaut's standard for every Agent)\n- Write in Simplified Technical English (ASD-STE100 style).";
+		const prompt = runnerSystemPrompt({ ...claim(), writing_standard: standard }, false);
+		expect(prompt).toContain(`Review only.`);
+		expect(prompt.indexOf(standard)).toBeGreaterThan(prompt.indexOf("Review only."));
+		expect(prompt.indexOf(standard)).toBeLessThan(prompt.indexOf("Security boundaries:"));
+		// No standard sent: nothing added.
+		expect(runnerSystemPrompt(claim(), false)).not.toContain("Simplified Technical English");
+	});
+
+	it("doesn't repeat the writing standard a built-in Profile already carries", () => {
+		expect(writingStandardSection("Writing\n- rule", "Writing\n- Write in Simplified Technical English (ASD-STE100 style).")).toBe("");
+		expect(writingStandardSection("Writing\n- rule", "Review only.")).toBe("\n\nWriting\n- rule");
+		expect(writingStandardSection(null, "Review only.")).toBe("");
 	});
 
 	it("lists available connectors as untrusted read-only evidence", () => {

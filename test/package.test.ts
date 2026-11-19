@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner that re-advertises changed models as v0.12.1", () => {
-		expect(pkg.version).toBe("0.12.1");
+	it("publishes the Runner that follows Takonaut's writing standard as v0.12.2", () => {
+		expect(pkg.version).toBe("0.12.2");
 	});
 
 	it("accepts machine credentials only through the environment", () => {
