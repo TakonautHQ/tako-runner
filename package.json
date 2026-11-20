@@ -28,6 +28,7 @@
     "THIRD_PARTY_NOTICES.md",
     "bun.lock",
     "README.md",
+    "docs",
     "LICENSE",
     "SECURITY.md"
   ],

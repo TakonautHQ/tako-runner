@@ -1,51 +1,51 @@
 # Tako Runner
 
-Tako Runner is the open-source, customer-managed execution service for
-Takonaut Project Agents. It runs Pi locally against an exact server-authorized
-Git commit while source code and raw transcripts remain on the customer's
-machine.
+Tako Runner runs Takonaut Project Agents on your own machine. It runs Pi on
+the exact Git commit that Takonaut sends. Your source code and the raw Pi
+transcripts stay on the machine.
 
-This is a standalone Runner, not a Pi package and not a Pi fork. Pi is used
-internally through its SDK. It is also separate from **Tako Bridge**: Bridge is
-an interactive, user-bound Pi extension, while Tako Runner is an unattended,
-organization-owned machine identity with an explicit Project allowlist.
+- Tako Runner is a standalone service. It is not a Pi package or a Pi fork.
+  It uses Pi through the Pi SDK.
+- Tako Runner is not Tako Bridge. Tako Bridge is a Pi extension that one
+  person uses interactively. Tako Runner is a machine that an organization
+  owns. It runs without a person, and only for the Projects that Takonaut
+  allows.
 
-## Security model
+## Security
 
-- A machine credential can only claim assigned work; each claim receives a
-  short-lived Run token.
-- Takonaut selects the Project repository and exact 40-character commit SHA.
-- Every Run uses a fresh detached Git worktree and fresh Pi session.
-- Runner tools are restricted to read, list, find, grep, and diff according to
-  the immutable Agent grant snapshot.
-- Sensitive paths, symlink escapes, edits, pushes, merges, and deployments are
-  denied.
-- Output requiring publication is held in Takonaut's Review queue.
-- Customer provider-token usage is reported separately and never consumes
-  Takonaut AI credits.
+- The machine credential can claim only work that Takonaut assigns to it. Each
+  claim gets a short-lived Run token.
+- Takonaut selects the repository and the exact 40-character commit SHA.
+- Each Run uses a new detached Git worktree and a new Pi session.
+- Agents get only the tools that their grant allows. By default these are
+  read, list, find, grep and diff.
+- The Runner refuses sensitive paths, symlink escapes, pushes, merges and
+  deployments.
+- Changes that an Agent proposes go to the Review queue in Takonaut. A person
+  approves them.
+- Model usage on your own provider account does not use Takonaut AI credits.
+- The Runner does not load third-party Pi packages into Runs, because Pi
+  packages can run any local code.
 
-Pi packages and extensions execute arbitrary local code. Tako Runner does not
-load ambient third-party Pi packages into unattended Runs.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Requirements
 
-- macOS or Linux
+- macOS or Linux. Windows is not supported.
 - Git
 - Bun 1.2 or newer
-- Pi 0.84 or newer
-- A provider authenticated for Pi in the current user account
-- A Takonaut Runner registration assigned to at least one Project
+- Pi 0.84 or newer, signed in to a model provider for this operating-system
+  user
+- On Linux, `bubblewrap` for the sandboxed shell
+- A Takonaut administrator who can approve the Runner
 
-## Homebrew
-
-Install Tako Runner from the official tap. Homebrew adds the tap and trusts only
-this formula:
+## Install
 
 ```bash
 brew install TakonautHQ/tap/tako-runner
 ```
 
-If you tap first, explicitly trust the formula before using its short name:
+If you add the tap first, trust the formula before you install it:
 
 ```bash
 brew tap TakonautHQ/tap
@@ -53,662 +53,109 @@ brew trust --formula TakonautHQ/tap/tako-runner
 brew install tako-runner
 ```
 
-The preferred developer setup opens Takonaut in your browser. A signed-in
-administrator confirms the exact organization, Runner name, capacity, and
-allowed Projects. Browser consent creates a Runner machine credential; it does
-not install the administrator's user session or Tako Bridge credential.
+To install from source, see [Setup](docs/setup.md#install-from-source).
 
-Set up a Runner with one command (Pi must be signed in to your model provider
-for this operating-system user):
+## Set up
 
 ```bash
 tako-runner setup --url https://takonaut.app
 ```
 
-Setup checks Git and Pi, opens Takonaut so an administrator can approve the
-machine and choose its projects, clones every repository of those projects
-into `~/.takonaut/repos/<owner>/<name>`, binds them, restarts the background
-service (Homebrew) and runs `doctor`. Add `--no-service` to skip the service.
-The Runner works only in its own clones, never in a developer's checkout.
+Setup does these steps:
 
-```bash
-tako-runner doctor            # every check this Runner needs, each with a fix
-tako-runner status            # server, service, repositories, connectors (--json)
-tako-runner repos sync        # clone repositories added to its projects since
-tako-runner repos list
-```
+1. It checks Git and Pi.
+2. It opens Takonaut in your browser. An administrator approves the machine
+   and selects its organization, name, capacity and Projects.
+3. It clones each repository of those Projects into
+   `~/.takonaut/repos/<owner>/<name>`.
+4. It starts the background service (Homebrew). Add `--no-service` to skip
+   this step.
+5. It runs `tako-runner doctor`.
 
-The Runner runs as many Runs at once as the capacity set in Takonaut. Each
-analysis stops after 20 minutes by default.
+The Runner works only in its own clones. It never works in a developer's
+checkout. For other setup methods, see [Setup](docs/setup.md).
 
-### Sandboxed workspace
-
-Agents set to Assist or Act get a shell (`runner_shell`) and file edits in the
-Run's throwaway worktree. Every command runs inside an OS sandbox (macOS
-`sandbox-exec`, Linux bubblewrap): no network, writes only inside the
-worktree and a private temp folder, and no access to the Runner's, Pi's, SSH,
-cloud, GitHub CLI or keychain credentials, or to Desktop, Documents and
-Downloads. Changes are attached to the result as a proposed patch and are
-never committed or pushed. Without a sandbox, Agents keep the read-only
-tools; `doctor` reports which applies. Install `bubblewrap` on Linux.
-
-### Local run archive
-
-Each Run's tool timeline and result are kept in `~/.takonaut/runs/<run-id>/`
-(owner-only, never uploaded) for 7 days to help debug a result. Set
-`TAKONAUT_RUNNER_ARCHIVE_DAYS` to change it, or `0` to turn it off. Takonaut
-only receives counts: tool calls, commands run, files changed and duration.
-
-To use an existing checkout instead of a Runner-owned clone, run setup with
-`--path`:
-
-```bash
-tako-runner setup --url https://takonaut.app --path /absolute/path/to/repository
-```
-
-For fleet provisioning, key-based configuration remains available. Supply the
-one-time `tkr_...` credential generated by Takonaut without putting it in shell
-history:
-
-```bash
-read -rs TAKONAUT_RUNNER_TOKEN
-export TAKONAUT_RUNNER_TOKEN
-
-tako-runner setup \
-  --url https://takonaut.app \
-  --org YOUR_ORGANIZATION_ID \
-  --path /absolute/path/to/repository \
-  --project-id YOUR_PROJECT_ID \
-  --repository-id YOUR_REPOSITORY_ID
-
-unset TAKONAUT_RUNNER_TOKEN
-```
-
-Run `map` once per repository. Repository-ID bindings support several repositories in the same Project and are advertised to Takonaut before work is claimed. Takonaut alone decides which Agents this Runner runs (see [Which Agents a Runner runs](#which-agents-a-runner-runs)); local paths never leave the Runner configuration file.
-
-### Trusted Native Runner mode
-
-You don't need Trusted Native for Agents to open pull requests or make other
-GitHub changes: Agents propose them, and Takonaut makes them through its
-GitHub App once a person approves (see [Organization tools and
-secrets](#organization-tools-and-secrets)). Trusted Native is the older path
-where this machine calls GitHub itself.
-
-Trusted Native mode is default-off and must be enabled twice for one exact Project repository:
-
-1. On an interactive terminal, `setup` warns that Trusted Native expands Runner authority and asks whether to enable it. Choosing yes creates a local Ed25519 signing identity, advertises protocol v3 capabilities, and keeps the private key only in the owner-readable credentials file. `--trusted-native` and `--disable-trusted-native` remain explicit non-interactive choices; non-interactive setup without either flag preserves an existing choice and otherwise stays read-only.
-2. In Takonaut, open the Profile's **Tools & Executors** page and publish a trust policy for that Runner–repository binding. Autonomous protected actions require a second explicit switch there plus an exact Profile tool grant set to **Automatic**.
-
-```bash
-cd /absolute/path/to/repository
-tako-runner setup --url https://takonaut.app --trusted-native
-
-# Return this local binding to standard read-only Runner mode:
-tako-runner map PROJECT_ID "$PWD" \
-  --repository-id REPOSITORY_ID \
-  --disable-trusted-native
-```
-
-A linked Takonaut GitHub integration remains mandatory. The model never receives GitHub tokens, PATs, SSH agents, the Runner private key, or a shell. GitHub mutations pass through a narrow local `gh api` broker only after the Runner verifies a repository/SHA-bound, five-minute, one-time Takonaut permit. The Runner signs the result receipt, and Takonaut independently checks the result through its linked GitHub App. Missing or stale trust, capabilities, repository identity, lease evidence, or Profile autonomy returns the action to the Review queue.
-
-Start the per-user background service:
+## Run the service
 
 ```bash
 brew services start tako-runner
-tako-runner status
-```
-
-Useful lifecycle commands:
-
-```bash
-brew services info tako-runner
-brew services restart tako-runner
+brew services restart tako-runner   # report changes to Takonaut now
 brew services stop tako-runner
 brew update && brew upgrade tako-runner
 ```
 
-Logs are written to `$(brew --prefix)/var/log/tako-runner.log`.
+The log is in `$(brew --prefix)/var/log/tako-runner.log`.
 
-Use **Settings → Execution → Runners** in Takonaut to inspect health,
-capacity, repositories, the Agents it runs, and credentials. Use **Runs** for
-immutable revision, publication, retry, and lifecycle history. Failed external
-publications can be retried there from stored findings without rerunning Pi.
+In Takonaut, open **Settings → Execution → Runners** to see the Runner's
+health, capacity, repositories, Agents and credentials. Open **Runs** to see
+the history of each Run. If a publication to an outside service failed, you
+can retry it there. The retry uses the stored findings and does not run Pi
+again.
 
-For support, create a privacy-safe local bundle:
+## Commands
 
-```bash
-tako-runner diagnostic-bundle
-```
+| Command | What it does |
+|---|---|
+| `tako-runner doctor` | Checks everything the Runner needs. Each failed check has a fix. |
+| `tako-runner status [--json]` | Shows the server, service, repositories and connectors. |
+| `tako-runner repos sync` | Clones repositories that people added to the Runner's Projects since setup. |
+| `tako-runner repos list` | Lists the repositories of the Runner. |
+| `tako-runner models` | Lists the models the Runner can use and its default model. |
+| `tako-runner tools` | Lists the organization tools and if each tool is ready. |
+| `tako-runner secrets set NAME` | Stores a secret on this machine. The value is not shown. |
+| `tako-runner connector add NAME -- COMMAND` | Adds a local MCP server for logs or other evidence. |
+| `tako-runner diagnostic-bundle` | Makes a support file without credentials or source code. |
 
-The bundle remains on the Runner and excludes credentials, repository source,
-raw Pi transcripts, tool output, and absolute local paths.
-
-### Repositories
-
-Run `tako-runner setup` inside each repository folder this machine should
-analyze; each run maps one more repository.
-
-### Which Agents a Runner runs
-
-Each Agent chooses its Runners on its page in Takonaut, under **Runs on**:
-**Any Runner that can run it** (the default) or **Only these Runners**. A Run
-goes to the least busy allowed Runner that serves the project and repository,
-has every tool the Agent requires with all its secrets set, and has the
-Agent's model. The **Runs on** list shows each Runner and what it lacks.
-
-To keep a machine for particular Agents, such as one with production access,
-turn on **Only run Agents that choose it** on its Runner card. Only Runner
-administrators can then add it to an Agent's **Runs on** list.
-
-This Runner reports what it has (repositories, connectors, ready tools,
-models) when it starts and whenever a tool becomes ready or stops being ready
-(checked every 5 minutes). `brew services restart tako-runner` reports at once.
+Run `tako-runner --help` for all commands and options.
 
 ## Models
 
-A Runner uses the models Pi is signed in to on this machine, plus any
-OpenAI-compatible endpoint you add. It reports the ones it can use to
-Takonaut, so Agents that choose a model go to a Runner that has it.
+The Runner uses the models that Pi is signed in to. You can also add an
+OpenAI-compatible endpoint, for example LiteLLM, Ollama or OpenRouter.
 
 ```bash
-tako-runner models                              # what this Runner can use and its default
-tako-runner models add litellm --from-pi        # reuse Pi's LiteLLM login (URL and key)
-tako-runner models add ollama --base-url http://localhost:11434/v1
-tako-runner models add router --base-url https://openrouter.ai/api/v1 --key-secret OPENROUTER_KEY
-tako-runner models default litellm/gpt-6.1-sol  # for Agents that don't choose a model
-tako-runner models test --all                   # stop advertising models your login refuses
+tako-runner models add litellm --from-pi
+tako-runner models default litellm/gpt-6.1-sol
+tako-runner models test --all
 ```
 
-Set a default: without one, an Agent that doesn't choose a model gets Pi's
-built-in default, which a login may refuse (for example, a ChatGPT Codex
-login refuses `gpt-5.5`). `tako-runner doctor` warns when there is none.
-Endpoints are configuration only (`~/.takonaut/models.json`); their models
-come from the endpoint's `/models` list and no third-party code runs.
-`models test --all` treats timeouts and rate limits as "not sure" and keeps
-those models.
-
-The Runner checks its models every 5 minutes and reports them again when they
-change: models added to or removed from an endpoint, a new default, or models
-`models test` stopped. If a provider or endpoint fails during a check, the
-Runner keeps the models it last reported. To report a change at once, restart
-the service (`brew services restart tako-runner`).
-
-## Several repositories in one Run
-
-An Agent that reads several repositories gets one Run per event. The Runner
-checks out one repository as the working directory and the others beside it,
-in `~/.takonaut/runner-worktrees/<run>.context/<name>/`, each at the exact
-commit Takonaut sent. The file tools take `repository` to work in any of
-them. Those the Agent may change (all by default; **May change** under
-**Code it reads**) are writable in the sandbox; the rest are read-only, the
-working directory included. `open_pull_request_with_changes` collects the
-changes of every repository the Agent changed; Takonaut opens one linked
-draft pull request in each after a person approves. A repository this machine
-hasn't cloned (`tako-runner setup` in its folder) is reported on the Run page
-and left out. Takonaut prefers a Runner that has all of them.
-
-## Follow-ups
-
-A follow-up on a Run (**Ask the Agent a follow-up** on a ticket or Run page)
-continues the same Pi session when this machine ran the earlier turn, so the
-Agent keeps everything it already read and only gets the new question. It
-runs on the same commit. Takonaut gives the Runner that ran the earlier turn
-the first 60 seconds to take it; another Runner starts from the earlier
-result instead.
-
-Sessions are kept in `~/.takonaut/threads/<thread>/<run>/` (owner-only) for
-24 hours after the last turn (`TAKONAUT_RUNNER_THREAD_HOURS`, `0` keeps none).
-They hold the Agent's tool results, so code it read.
-
-## Writing standard
-
-Takonaut sends its writing standard with each Run. The Runner adds it to the
-Agent's instructions, after the Profile's own text. If the Profile already
-contains the standard, the Runner does not add it again. Takonaut versions
-that do not send the standard leave the instructions unchanged.
-
-## Organization tools and secrets
-
-Organization administrators add tools on the **Agents → Tools** tab in
-Takonaut (CloudWatch, Sentry, an API call, a script…) and install them on
-Runners. The Runner fetches its tools; a tool is ready once every secret it
-uses is set on this machine. Values never leave the machine and are redacted
-from everything the Runner reports or shows a model.
-
-```bash
-tako-runner tools                       # tools on this Runner and whether each is ready
-tako-runner secrets                     # secrets set here and the ones tools still need
-tako-runner secrets set ADMIN_API_TOKEN # prompts; value not echoed
-tako-runner secrets import --env-file ./runner.env
-tako-runner tools test look-up-order --arg order_id=ORD-1182
-```
-
-Secrets live in the owner-only file `~/.takonaut/secrets.json`. `--keychain`
-stores one in the macOS Keychain instead, but the background service can't
-answer Keychain prompts, so prefer the file for `brew services`.
-`tako-runner doctor` reads every secret the way the service does.
-
-A tool marked **Changes** never runs during a Run: the Agent proposes the
-call, and the Runner makes it only after a person approves, with a
-single-use permit for exactly those arguments.
-
-## Connectors (logs and other outside evidence)
-
-A connector is a local [MCP](https://modelcontextprotocol.io) server that gives
-Agents read-only access to evidence outside the repository, such as production
-logs. Register it on the Runner machine; its command and credentials stay in
-the owner-only file `~/.takonaut/runner-connectors.json` and never reach
-Takonaut.
-
-```bash
-# AWS CloudWatch Logs, using a read-only AWS profile from ~/.aws/config
-tako-runner connector add aws-logs \
-  --description "Production CloudWatch logs" \
-  --env AWS_PROFILE=takonaut-readonly --env AWS_REGION=ap-south-1 \
-  -- uvx awslabs.cloudwatch-mcp-server@latest
-
-tako-runner connector test aws-logs     # starts it and lists the usable tools
-tako-runner connector list              # names and env variable names only
-brew services restart tako-runner       # advertise it to Takonaut
-```
-
-After the restart, open the Agent's **Tools & permissions** page in Takonaut.
-The connector appears under **Runner connectors** as `Aws Logs (Runner
-connector)`; enable it for each Agent that should read those logs.
-
-During a Run, only connectors the Agent is granted are started. Only tools the
-server marks read-only (MCP `readOnlyHint`) are offered to the model unless you
-allow a tool by name with `--allow-tool`. The server gets a minimal environment
-(`PATH`, `HOME`, locale, and the `--env` values), never the Runner's own.
-Tool output is capped at 50 KiB per call and passed to the model as untrusted
-data. The server is stopped when the Run ends. Use credentials that can only
-read: the Runner cannot make a mutating tool safe.
-
-## Install from source
-
-```bash
-git clone https://github.com/TakonautHQ/tako-runner.git
-cd tako-runner
-bun install --frozen-lockfile
-bun link
-```
-
-Run `tako-runner setup --url https://takonaut.app` from the repository the
-machine will analyze. Use the lower-level `enroll`, `configure`, and `map`
-commands only for scripted fleet provisioning with complete repository and
-Project identifiers. Which Agents run on it is configured in Takonaut.
-
-## Configuration
-
-Public configuration is stored at `~/.takonaut/runner.json`. The machine
-credential and optional Trusted Native Ed25519 private key are stored separately
-at `~/.takonaut/runner-credentials.json`. Only the public key and key ID appear
-in the public configuration. Both files and their parent directory are
-ownership-checked; credentials must remain mode `0600`.
-
-The Runner refuses root execution, non-HTTPS servers except explicit loopback
-development URLs, symlinked configuration paths, wrong ownership, and
-configuration directories or files readable by group/others. Browser
-enrollment refuses to replace existing configuration unless `--force` is
-explicit; replacement intentionally clears repository mappings so Projects
-from another organization cannot carry over.
-
-For a temporary foreground test on a volume whose mount point is intentionally
-group-writable, allow exactly that one ancestor on every invocation:
-
-```bash
-tako-runner setup \
-  --url https://takonaut.app \
-  --allow-unsafe-ancestor /Volumes/External
-
-tako-runner start --allow-unsafe-ancestor /Volumes/External
-```
-
-The equivalent one-command environment override is:
-
-```bash
-TAKONAUT_RUNNER_ALLOW_UNSAFE_ANCESTOR=/Volumes/External tako-runner start
-```
-
-The override must be an absolute path and matches only that exact ancestor. It
-does not bypass unsafe ownership, symlinks, credential modes, or another
-writable directory below it. Writable ancestors normally remain blocked
-because another local account could replace Runner configuration, credentials,
-or repository paths. Prefer the foreground command for temporary testing;
-`--start-service` does not persist the CLI override into the service.
-
-The Runner configuration directory must still be private. If an existing
-`~/.takonaut` is readable by group or others, either make only that user-owned
-directory private with `chmod 700 ~/.takonaut`, or set
-`TAKONAUT_RUNNER_CONFIG` and `TAKONAUT_RUNNER_CREDENTIALS` to files inside a
-separate `0700` directory. The unsafe-ancestor override intentionally does not
-relax this credential boundary.
-
-A browser enrollment credential is delivered once and stored hash-only by
-Takonaut. If the response is lost after Takonaut creates the Runner, the CLI
-prints its non-secret Runner ID when possible; rotate or revoke that Runner and
-enroll again.
-
-Override the paths only for isolated development:
-
-```bash
-export TAKONAUT_RUNNER_CONFIG=/path/to/runner.json
-export TAKONAUT_RUNNER_CREDENTIALS=/path/to/runner-credentials.json
-```
-
-## Runner API request deadlines
-
-`RunnerApiClient` applies a 10-second timeout to each request, including reading
-success/error bodies and the setup catalog. The optional third constructor
-argument `{ requestTimeoutMs }` can shorten this to an integer from 1 to 10000 ms;
-it cannot disable or extend the limit. Each request has its own cancellation
-signal. The client aborts timed-out HTTP exchanges and does not automatically
-replay them. A timeout has an **unknown remote outcome**: a server mutation may
-already have committed. Do not substitute another attempt or blindly retry a
-mutation to work around a timeout. Injected transports must honor cancellation
-to release their own resources; the client still rejects on timeout if they do not.
-
-This is a transport timeout, not a hard real-time bound for a blocked
-JavaScript event loop. Process supervision is described below.
-
-## Analysis supervision (macOS/Linux)
-
-Each claimed analysis runs Pi in a separate worker process
-(`tako-runner __analysis-worker`, internal) in its own POSIX process group. The
-worker receives the claim over stdin. The Runner does not pass it the machine
-credential: `TAKONAUT_RUNNER_TOKEN` is removed from its environment. The worker
-runs as the same operating-system user, so this is not a sandbox: it could still
-read that user's `0600` credential file.
-
-- Heartbeats run one at a time every third of the lease. If one is rejected, or
-  none succeeds within two thirds of the lease (counted from the initial
-  heartbeat), the claim is fenced. Fencing plus the kill grace period finishes
-  before the 30-second minimum lease expires.
-- stdin stays open as a lifeline. If the Runner process dies for any reason
-  (crash, SIGKILL, Ctrl-C during `once`), the worker sees EOF and kills its own
-  process group.
-- Fencing or daemon shutdown (SIGINT/SIGTERM) sends SIGTERM to the worker's
-  process group, then SIGKILL after a 5-second grace period. The daemon waits
-  until the whole group is gone before cleaning up the worktree or claiming
-  more work. A fenced claim never reports usage or a result.
-- If group termination cannot be confirmed, the claim's worktree is left in
-  place, the daemon writes a `0600` stop marker
-  (`runner-supervision-stop.json`, next to `runner.json`) and exits. Any later
-  daemon, including one restarted by the Homebrew service's `keep_alive`,
-  refuses to claim work while the marker exists. After checking for leftover
-  Runner/Pi processes, clear it with `tako-runner clear-stop`.
-
-Limits:
-
-- `tako-runner once` does not check the stop marker; only the daemon does.
-- A descendant that deliberately leaves the process group (for example with
-  `setsid` or by daemonizing) is outside this guarantee. The lifeline cannot
-  help if the worker itself is frozen (for example `SIGSTOP`).
-- Daemon shutdown now stops in-flight analysis and reports it failed, rather
-  than letting it finish.
-- Worktree preparation and cleanup Git commands are not separately
-  time-bounded. Windows is not supported. Shared Project context builds run
-  in the daemon (below); automatic delivery execution is not enabled.
-
-## Delivery control adapter (not a daemon execution mode)
-
-`RunnerApiClient.claimDelivery()` explicitly claims already-dispatched delivery
-work via `POST /api/runner/v2/delivery/claim`. It requires the existing server
-rollout gates, an authorized machine credential, advertised protocol 2 or later,
-and current Project/repository/capability eligibility. It does not upgrade the
-advertised protocol, start a delivery executor, or change the analysis daemon's
-claim loop. It enables no additional execution authority.
-
-The returned `RunnerDeliveryClaim` is frozen and contains `run_id`, `project_id`,
-`attempt_id`, and `lease_expires_at`; no available work returns `null`. Retain that
-exact claim for `heartbeatDelivery`, `activityDelivery`, `evidenceDelivery`,
-`pollDeliveryCommands`, `acknowledgeDeliveryCommand`, and `completeDelivery`.
-These methods attach its `X-Runner-Attempt-Id` to every delivery request. Never
-substitute a successor claim into an older process. A 401/409 is a lost authority
-or lease: stop that work rather than retrying it with a newer claim.
-
-This adapter is control transport, not process supervision. Automatic delivery
-execution, physical lease-loss termination, and customer-Runner cancellation/
-abandonment still need their separate rollout gates. Do not treat the shared
-capacity foundation as approval to enable those workflows.
-
-## Shared Project context builds
-
-When an administrator enables shared context for a repository (Takonaut →
-Project Settings → **Shared context**: indexing, path allowlist, processing
-policy acknowledgment) and grants this Runner, the daemon builds a structure
-index of the repository's default branch whenever Takonaut observes a new
-head:
-
-- It reads only TypeScript, JavaScript and Python files matching the
-  allowlist, from Git objects of that exact commit (not your working tree),
-  skipping secret-looking paths, non-UTF-8 and oversized files (at most
-  5,000 files of up to 512 KiB).
-- It extracts files, symbols and their relations, with hashes, offline
-  (bundled WebAssembly grammars; no AI model, no network, nothing installed
-  or executed from the repository).
-- It uploads only that structure (at most 64 MiB, gzip-compressed). Source
-  text stays on this machine.
-
-Bind the repository once with `tako-runner map <project-id> <path>
---repository-id <id>` (`setup` does this for the repository it detects).
-Takonaut shows each build's status in the Shared context settings.
-
-`RunnerApiClient.claimGraphBuild()` claims one shared Project context structural
-build via `POST /api/runner/v2/graph/claim`. It requires the server-side
-`shared_project_context` feature, administrator consent for the repository and
-a separate graph grant for this Runner; advertising a capability is not enough.
-The frozen `RunnerGraphClaim` carries the exact commit, path allowlist, consent
-revision and the build's extractor identity, and no prompt, profile or tools.
-
-`heartbeatGraphBuild` and `failGraphBuild` attach the claim's
-`X-Runner-Attempt-Id`. Failure codes are a fixed list (`RunnerGraphFailureCode`).
-A 409 means the lease is gone (`lease_lost`), this Runner lost admission
-(`admission_lost`, the build returns to the queue) or consent changed
-(`consent_changed`): stop that work. A missing or malformed attempt header is
-also a 409 ("Runner attempt is no longer active").
-
-`stageGraphSources` (`src/graph-sources.ts`) prepares the input for a future
-extractor. It reads blobs of the exact claimed commit straight from Git
-objects into a new private (`0700`) staging directory: no worktree is checked
-out, and repository hooks, `core.fsmonitor`, smudge filters and attributes do
-not run. Only regular UTF-8 text files matching the allowlist are staged;
-symlinks, submodules, binary, non-UTF-8 and oversize files are skipped with a
-reason (as are names that would collide on a case- or Unicode-insensitive
-filesystem), and sensitive, unsafe or non-UTF-8 paths are counted without being
-named. File count, per-file and total size are bounded, and every Git command
-has a timeout. A missing commit triggers one fetch of the default branch only,
-without submodules, `FETCH_HEAD` or background maintenance. Git's terminal
-prompt is disabled; SSH or askpass prompts from the machine's own Git setup are
-not. Allowlist globs: `**` spans whole path segments, `*` and `?` stay within
-one segment, everything else is literal, and a pattern without wildcards
-covers that path and everything below it. Paths over 1,024 bytes, 64 levels
-or with a segment over 255 bytes are counted as unsafe without being examined,
-which also bounds matching cost (no regular expressions). Read staged files by
-their manifest path, not by walking the directory.
-
-`createStructureIndexer` (`src/structure-index.ts`) is the Runner's own,
-offline structure indexer (`tako-structure/1`): WebAssembly tree-sitter
-grammars for TypeScript, TSX, JavaScript and Python, vendored under `grammars/`
-and refused unless their SHA-256 matches the pinned value. For one file it
-returns definitions (kind, name, lines and UTF-8 byte offsets) and references,
-with parse errors reported rather than hidden. Files over 512 KiB fail as
-`oversize`; a parse or query over 5 s fails as `timeout`, and the next file is
-unaffected. Keep one indexer per process: `dispose()` frees parsers and
-queries, but grammar modules stay loaded. Offsets refer to the UTF-8 encoding
-of the string passed in, so decode files with `fatal: true` and
-`ignoreBOM: true` for offsets to match the file's bytes.
-
-Covered: functions, classes, methods, interfaces, TypeScript type aliases,
-enums and namespaces; calls, constructions (`new X` or `new ns.X`), bare
-type annotations, ES imports and re-exports, CommonJS `require("x")`, dynamic
-`import("x")`, `import x = require("x")`, and all Python import forms. Not yet
-covered (absent links are not evidence of absence): generic, qualified and
-heritage type references; `declare module "m"`; dotted namespaces
-(`namespace A.B {}`); class-field arrow methods and `#private` methods;
-anonymous default exports; computed `require`/`import`; `export import x =
-require()` (a grammar error in tree-sitter-typescript 0.23.2). A local function
-named `require` is still recorded as an import (no scope analysis);
-decorators are outside definition spans; getters and setters, and overloads,
-repeat a name within a file. See THIRD_PARTY_NOTICES.md for grammar licenses
-and design credit.
-
-`buildStructureArtifact` (`src/structure-artifact.ts`) turns staged sources into
-one commit's artifact (`takonaut-structure-artifact/v1`), as canonical JSON with
-its SHA-256:
-
-- `files`: every staged file in a supported language (path, size, hash).
-- `symbols`: the file's position, a qualified name (`Greeter.greet`), stable
-  IDs (path, kind, qualified name and an ordinal among true repeats such as
-  getter/setter pairs, overloads or functions inside anonymous callbacks),
-  lines, UTF-8 byte offsets and a hash of the definition's bytes (`export`
-  and decorators are outside it). Constants have no hash: a short value such
-  as a password could be confirmed by guessing.
-- `edges`: `[kind, source, target, resolution]` over node positions (files,
-  then symbols): `contains`, `imports` (relative JS/TS paths; Python relative
-  imports, and absolute ones from the nearest enclosing package root),
-  `calls`, `constructs` (`new X()` or calling a class), `references_type`.
-  Python absolute imports resolve only from directories that are not
-  packages themselves, as in Python 3.
-  Resolution: `same_file` (only candidate in the file), `same_class`
-  (`this.f()`/`self.f()` to the enclosing class's only method `f`) or
-  `unique_name` (only candidate in the snapshot, same language family; a
-  name-only match that local variables could still shadow).
-- `unresolved`: `[kind, source, name, reason]` with `not_found`,
-  `ambiguous`, `non_relative` (an import matching no staged file),
-  `receiver_unknown` (`x.f()` for any other receiver, or `this` inside a
-  nested non-arrow function) or `shadowed` (a parameter, including
-  destructured, rest and splat parameters, a type parameter or another
-  same-file definition binds the name; a callback parameter outside any
-  definition shadows the name in the whole file). References with names over
-  256 bytes are skipped.
-  Import names are kept only when package-like; paths and URLs are `null`.
-  Absence of an edge is not evidence of absence.
-- `coverage`: per file `indexed`, `partial` (parse errors, or over the
-  nesting depth of 32, 5,000 symbols or 20,000 references), `skipped`
-  (unsupported language, oversize, staging skips, budget exhausted, or over
-  the snapshot caps of 100,000 symbols, 600,000 references or an estimated
-  48 MiB of symbols and references) or `error`
-  (timeout); one bad file never fails the snapshot.
-- `withheld`: counts of sensitive and unsafe paths from staging, never names.
-
-Staged files are re-verified against the manifest; the whole snapshot has a
-time budget (default 120 s) and a 64 MiB size limit; local paths never appear.
-Bare package imports (`react`) and tsconfig path aliases are `external`;
-`from pkg import name` links to `pkg` only.
-
-`processGraphClaim` (`src/graph-build.ts`) runs one claimed build: it keeps the
-lease with the same watchdog as analysis, then runs the hidden
-`__graph-worker` command in its own process group without the Runner
-credential. The worker stages the commit and builds the artifact with one
-indexer, writing it to a private work root. A claim for another extractor or
-schema version or extractor configuration is refused (`extractor_unavailable`)
-before any worker starts.
-The parent reads the artifact without following links or blocking on special
-files, re-checks its size and hash, and hands exactly those bytes to the
-upload step. A whole build has a 15-minute deadline. Failures are reported as
-content-free codes. After lease loss or shutdown nothing is reported, whatever
-stopped the build first, so the lease expires and another Runner can reclaim
-it. If worker termination is unconfirmed, the work root is kept and the
-daemon stops, as for analysis.
-
-`uploadGraphArtifact` sends the verified artifact, gzip-compressed, to
-`PUT /api/runner/v2/graph/builds/{build_id}/artifact`; the server stages it
-and validates and publishes it in the background.
-
-The daemon claims graph builds only when it has no analysis work (a graph
-build can delay queued analysis by up to its 15-minute deadline), and only
-for repositories bound with `tako-runner map <project-id> <path>
---repository-id <id>` (a Project-only mapping is not enough). While the
-server has graph builds turned off it checks again every 10 minutes. At
-start it removes graph work roots older than 30 minutes left by a killed
-daemon (`<config dir>/runner-graph`); `diagnostic-bundle` reports how many
-exist, never their names.
-The server validates the artifact, publishes it and serves it to Project
-members' agents; turning consent off stops serving it at once and deletes it
-within an hour.
-
-## Development
-
-```bash
-bun install --frozen-lockfile
-bun run test
-bun run typecheck
-bun run pack:check
-```
-
-The compatible Pi runtime suite is intentionally pinned. Upgrade all
-`@earendil-works/pi-*` packages together and verify a production-only packed
-installation before releasing.
-
-## Planning turns
-
-The Runner also runs Planner turns from Planning Studio (Runs with mode
-`planning`). A planning turn is read-only: it uses a detached worktree at the
-Grill session's pinned commit, gets only the tools the Planner profile grants,
-never writes to the repository, pushes or opens pull requests, and its result
-is completed back to Takonaut as a Draft, never published. Untrusted text
-(the instruction, ADRs in force, session context) is fenced in the prompt as
-data.
-
-The Pi session for a Grill session is kept warm between turns, separately for
-each member asking, in `~/.takonaut/planning/` (owner-only;
-`TAKONAUT_RUNNER_PLANNING_SESSIONS`), for 30 minutes after the last turn
-(`TAKONAUT_RUNNER_PLANNING_WARM_MS`).
-
-### Hosting a Grill (v0.10.0)
-
-When a team chooses this Runner to host a Grill (Grill v2), every member's turn
-continues the Grill's one shared session, in
-`~/.takonaut/planning/<grill>/shared-g<generation>/`, warm for a day, on the
-model the team chose (the Run fails rather than fall back to another model). A
-new generation (host or model changed, or Rebuild session) starts fresh with
-the Grill so far in the system prompt, together with the Project's Grill
-prompt. A side branch keeps its own session under `branches/<branch>/`,
-forked from the main session on its first turn; its Runs get no write tools.
-
-### Drafting and regenerating Mockups (v0.11.0)
-
-A person in Takonaut can ask a Project's Agent to draft a new Mockup, or to
-regenerate one from the team's pin and area comments. The Run (`mode:
-"mockup"`) is read-only like a planning turn: the code is checked out at a
-pinned commit so the agent can match the product's UI, it gets only the
-Agent's exactly granted organization tools, and it changes nothing. The
-current source, the comments with where they point, the request and the work
-item's published text come with the claim; the agent answers with the
-complete new source in one `takonaut-mockup` block, and Takonaut checks it,
-publishes it and marks the comments addressed. It runs on any Runner of the
-Project and repository that may run that Agent (its Runs on setting).
-
-### Tools and sealed secrets (v0.12.0)
-
-Runs, script tools and connectors find programs where installers put them
-(Homebrew, `/usr/local/bin`, `~/.local/bin`), not only the service's bare
-`PATH`. A tool is ready only when its program and every program it lists are
-installed; otherwise its state names what's missing (`tako-runner doctor`
-shows it too). A script stored in Takonaut is written once, by checksum, under
-`~/.takonaut/tool-scripts/`, and its path replaces `${script}` in the command.
-
-Secrets can be entered on a tool's page in Takonaut. The Runner keeps a P-256
-key in `~/.takonaut/runner-sealing-key.json` (owner-only, unreadable from Runs)
-and advertises its public half; the browser seals each value to it, bound to
-the key's fingerprint and the secret's name. The Runner opens it, stores it
-like `tako-runner secrets set` and tells Takonaut, which then deletes the
-sealed copy. Compare `tako-runner secrets fingerprint` with the fingerprint
-shown in the browser the first time.
-
-## Homebrew release formula
-
-After publishing a GitHub tag and calculating the release package tarball SHA-256:
-
-```bash
-bun run formula:render -- VERSION SHA256 dist/tako-runner.rb
-brew style dist/tako-runner.rb
-```
-
-Commit the rendered formula to
-[`TakonautHQ/homebrew-tap`](https://github.com/TakonautHQ/homebrew-tap) as
-`Formula/tako-runner.rb`.
+Set a default model. If there is no default, an Agent that does not select a
+model gets Pi's default, and your login can refuse that model. For more, see
+[Models, tools and connectors](docs/models-tools-connectors.md).
+
+## Files on this machine
+
+All files are in `~/.takonaut/` and only the owner can read them.
+
+| File or folder | Contents |
+|---|---|
+| `runner.json` | Public configuration |
+| `runner-credentials.json` | Machine credential (mode `0600`) |
+| `secrets.json` | Tool secrets |
+| `models.json` | Model endpoints and the default model |
+| `runner-connectors.json` | Connector commands and their environment |
+| `repos/` | Repository clones |
+| `runs/<run-id>/` | Tool timeline and result of each Run, kept for 7 days |
+
+## Get help
+
+1. Run `tako-runner doctor` and do the fix that it shows.
+2. If the problem continues, run `tako-runner diagnostic-bundle` and send the
+   file to support. The bundle does not contain credentials, source code, Pi
+   transcripts, tool output or absolute local paths.
+
+## Documentation
+
+- [Setup](docs/setup.md): other setup methods, Agent selection,
+  configuration safety and install from source
+- [How Runs work](docs/runs.md): the sandbox, several repositories,
+  follow-ups, the writing standard, planning turns, Mockups and process
+  supervision
+- [Models, tools and connectors](docs/models-tools-connectors.md)
+- [Trusted Native mode](docs/trusted-native.md)
+- [Shared Project context builds](docs/shared-context.md)
+- [Developer reference](docs/developer-reference.md): API client, delivery
+  adapter, tests and releases
 
 ## License
 
