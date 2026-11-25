@@ -91,7 +91,13 @@ The Runner runs Planner turns from Planning Studio. These Runs have mode
 `planning`. A planning turn is read-only:
 
 - It uses a detached worktree at the commit that the Grill session pinned.
-- It gets only the tools that the Planner Profile grants.
+  The Grill's other pinned repositories are checked out next to it,
+  read-only, when this Runner has a local clone of them.
+- It always gets the repository read tools: `runner_read`, `runner_list`,
+  `runner_find` and `runner_grep` (Tako Runner 0.12.3 and later). Older
+  Runners give these tools only when the Planner Profile grants them, so the
+  Planner can't check the code.
+- Its other tools are only the tools that the Planner Profile grants.
 - It does not write to the repository, push or open pull requests.
 - Its result goes back to Takonaut as a Draft. It is not published.
 - The prompt marks untrusted text as data. This includes the instruction,

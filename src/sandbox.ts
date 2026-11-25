@@ -121,7 +121,11 @@ export function bwrapArgs(paths: SandboxPaths, command: string): string[] {
 		"--new-session",
 	];
 	for (const path of SECRET_PATHS.map((p) => join(paths.home, p))) {
-		if (existsSync(path)) args.push("--tmpfs", path);
+		if (!existsSync(path)) continue;
+		// bwrap cannot mount a tmpfs on a file ("Destination is not a directory"),
+		// so a secret file is covered with an empty, read-only /dev/null instead.
+		if (statSync(path).isDirectory()) args.push("--tmpfs", path);
+		else args.push("--ro-bind", "/dev/null", path);
 	}
 	for (const path of writablePaths(paths)) {
 		args.push("--bind", path, path);

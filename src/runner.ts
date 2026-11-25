@@ -2386,6 +2386,13 @@ export function makeRunnerTools(cwd: string, claim: RunnerClaim) {
 	if (typeof modelPolicy?.autonomy === "string") {
 		for (const name of Object.keys(tools)) allowed.add(name);
 	}
+	// A planning Run reads the bound repositories at the pinned commit: the
+	// Planner checks the code for the brief and each round. These tools only
+	// read the Run's own worktree and context checkouts, so the read-only
+	// planning contract (ADR-0010 B6) holds without a Planner grant.
+	if (claim.mode === "planning") {
+		for (const name of ["read", "list", "find", "grep"]) allowed.add(name);
+	}
 	return Object.entries(tools).flatMap(([grant, tool]) =>
 		allowed.has(grant) ? [tool] : [],
 	);

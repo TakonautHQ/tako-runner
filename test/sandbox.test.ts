@@ -34,6 +34,49 @@ describe("sandbox profile", () => {
 		expect(args).toContain("--unshare-net");
 		expect(args.join(" ")).toContain(`--tmpfs ${join(paths.home, ".ssh")}`);
 	});
+
+	it("hides secret files with /dev/null, because bwrap cannot mount a tmpfs on a file", () => {
+		const paths = fixture();
+		writeFileSync(join(paths.home, ".takonaut", "runner.json"), "{}");
+		const args = bwrapArgs(paths, "true").join(" ");
+		for (const file of [".takonaut/runner.json", ".takonaut/runner-credentials.json"]) {
+			expect(args).toContain(`--ro-bind /dev/null ${join(paths.home, file)}`);
+			expect(args).not.toContain(`--tmpfs ${join(paths.home, file)}`);
+		}
+	});
+});
+
+describe.skipIf(detectSandbox() !== "bwrap")("sandboxed commands on Linux", () => {
+	it("runs with secret files present, writes in the worktree only, and cannot read secrets or reach the network", async () => {
+		const paths = fixture();
+		writeFileSync(join(paths.home, ".takonaut", "runner.json"), "{\"url\":\"runner-config\"}");
+		const result = await runSandboxed(
+			"bwrap",
+			paths,
+			[
+				"cat app.txt",
+				"echo patched > app.txt && echo wrote-worktree",
+				`echo x > ${paths.root}/outside 2>/dev/null || echo outside-denied`,
+				`cat ${paths.home}/.ssh/id_ed25519 2>/dev/null; echo ssh-checked`,
+				`cat ${paths.home}/.takonaut/runner-credentials.json 2>/dev/null; echo credentials-checked`,
+				`cat ${paths.home}/.takonaut/runner.json 2>/dev/null; echo config-checked`,
+				`echo x > ${paths.home}/.takonaut/runner.json 2>/dev/null || echo config-write-denied`,
+				"curl -s -m 3 https://example.com >/dev/null 2>&1 || echo network-denied",
+				"git --version >/dev/null && echo git-ok",
+			].join("; "),
+			{ timeoutMs: 20_000 },
+		);
+		expect(result.output).not.toContain("Destination is not a directory");
+		expect(result.exitCode).toBe(0);
+		for (const line of ["hello", "wrote-worktree", "outside-denied", "ssh-checked", "credentials-checked", "config-checked", "config-write-denied", "network-denied", "git-ok"]) {
+			expect(result.output).toContain(line);
+		}
+		expect(result.output).not.toContain("PRIVATE");
+		expect(result.output).not.toContain("tkr_secret");
+		expect(result.output).not.toContain("runner-config");
+		expect(readFileSync(join(paths.worktree, "app.txt"), "utf8")).toBe("patched\n");
+		expect(readFileSync(join(paths.home, ".takonaut", "runner.json"), "utf8")).toContain("runner-config");
+	}, 30_000);
 });
 
 describe.skipIf(detectSandbox() !== "macos")("sandboxed commands on macOS", () => {

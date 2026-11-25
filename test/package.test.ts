@@ -42,8 +42,8 @@ describe("standalone package", () => {
 		});
 	});
 
-	it("publishes the Runner that follows Takonaut's writing standard as v0.12.2", () => {
-		expect(pkg.version).toBe("0.12.2");
+	it("publishes the Runner whose Planner turns read the pinned repositories as v0.12.3", () => {
+		expect(pkg.version).toBe("0.12.3");
 	});
 
 	it("accepts machine credentials only through the environment", () => {

@@ -780,6 +780,27 @@ describe("Runner tool grants", () => {
 			"runner_git_diff",
 		]);
 	});
+
+	it("gives a planning Run the repository read tools without a Planner grant", () => {
+		// prod Grill 73e28479: the Planner profile grants no runner.* tools, so the
+		// Planner could not check the code at the pinned commit.
+		const planningClaim = claim({
+			mode: "planning",
+			definition_snapshot: {
+				...claim().definition_snapshot,
+				agent_profile_snapshot: {
+					...claim().definition_snapshot.agent_profile_snapshot,
+					tool_grants: { "tako_grill.read": { enabled: true } },
+				},
+			},
+		});
+		expect(makeRunnerTools(process.cwd(), planningClaim).map((tool) => tool.name)).toEqual([
+			"runner_read",
+			"runner_list",
+			"runner_find",
+			"runner_grep",
+		]);
+	});
 });
 
 describe("Runner Profile identity", () => {

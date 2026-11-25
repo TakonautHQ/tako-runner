@@ -144,6 +144,15 @@ All files are in `~/.takonaut/` and only the owner can read them.
    file to support. The bundle does not contain credentials, source code, Pi
    transcripts, tool output or absolute local paths.
 
+## What's new in 0.12.3
+
+Planner turns in a Grill read the code. A planning Run always gets the
+repository read tools (`runner_read`, `runner_list`, `runner_find` and
+`runner_grep`). It reads every repository that the Grill pinned, at the
+pinned commit, and never changes one. Older Runners give these tools only
+when the Planner Profile grants them. Takonaut shows a warning in Get ready
+for a Grill that runs on an older Runner. See [Runs](docs/runs.md).
+
 ## Documentation
 
 - [Setup](docs/setup.md): other setup methods, Agent selection,
